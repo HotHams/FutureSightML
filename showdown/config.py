@@ -1,0 +1,32 @@
+"""Configuration loader."""
+
+from pathlib import Path
+from typing import Any
+import yaml
+
+
+_CONFIG_CACHE: dict | None = None
+
+
+def load_config(path: str | Path | None = None) -> dict[str, Any]:
+    """Load and cache the YAML configuration file."""
+    global _CONFIG_CACHE
+    if _CONFIG_CACHE is not None and path is None:
+        return _CONFIG_CACHE
+
+    if path is None:
+        # Walk up from this file to find config.yaml at project root
+        search = Path(__file__).resolve().parent.parent / "config.yaml"
+        if not search.exists():
+            search = Path.cwd() / "config.yaml"
+        path = search
+
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Config file not found: {path}")
+
+    with open(path, "r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+
+    _CONFIG_CACHE = cfg
+    return cfg

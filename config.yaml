@@ -1,0 +1,62 @@
+scraper:
+  replay_base_url: "https://replay.pokemonshowdown.com"
+  stats_base_url: "https://www.smogon.com/stats"
+  showdown_data_url: "https://raw.githubusercontent.com/smogon/pokemon-showdown/master/data"
+  max_concurrent_requests: 10
+  request_delay_ms: 100
+  min_rating: 1500
+  max_pages_per_format: 200
+
+formats:
+  singles:
+    - gen9ou
+    - gen9uu
+    - gen9ru
+    - gen9nu
+    - gen9ubers
+  doubles:
+    - gen9vgc2024regf
+    - gen9vgc2024regg
+    - gen9vgc2025regg
+    - gen9doublesou
+
+database:
+  path: "data/showdown.db"
+
+training:
+  batch_size: 256
+  learning_rate: 0.001
+  epochs: 100
+  patience: 10
+  train_split: 0.8
+  val_split: 0.1
+  test_split: 0.1
+  min_rating_filter: 1500
+  checkpoint_dir: "data/checkpoints"
+
+model:
+  pokemon_embed_dim: 64
+  move_embed_dim: 32
+  item_embed_dim: 32
+  ability_embed_dim: 32
+  pokemon_hidden_dim: 128
+  team_hidden_dim: 256
+  attention_heads: 4
+  dropout: 0.2
+
+xgboost:
+  n_estimators: 1000
+  max_depth: 8
+  learning_rate: 0.05
+  subsample: 0.8
+  colsample_bytree: 0.8
+  early_stopping_rounds: 50
+
+teambuilder:
+  population_size: 200
+  generations: 500
+  mutation_rate: 0.15
+  crossover_rate: 0.7
+  elite_size: 20
+  tournament_size: 5
+  meta_sample_size: 50
