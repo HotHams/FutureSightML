@@ -170,44 +170,58 @@ class FeatureExtractor:
     # Engineered features (for XGBoost)
     # ------------------------------------------------------------------
 
+    def _team_stats_vector(self, team: list[dict]) -> dict[str, Any]:
+        """Extract intermediate team data for feature engineering."""
+        type_counts = np.zeros(NUM_TYPES, dtype=np.float32)
+        base_stats_list = []
+        speeds = []
+        team_types_list = []
+
+        for pkmn in team[:TEAM_SIZE]:
+            species_id = _to_id(pkmn.get("species", ""))
+            types = self._get_types(species_id)
+            team_types_list.append(types)
+            for t in types:
+                if t in TYPE_TO_IDX:
+                    type_counts[TYPE_TO_IDX[t]] += 1
+
+            stats = self._get_base_stats(species_id)
+            if stats:
+                base_stats_list.append(stats)
+                speeds.append(stats.get("spe", 0))
+            else:
+                base_stats_list.append({sn: 0 for sn in STAT_NAMES})
+                speeds.append(0)
+
+        return {
+            "type_counts": type_counts,
+            "base_stats_list": base_stats_list,
+            "speeds": speeds,
+            "types_list": team_types_list,
+            "team": team[:TEAM_SIZE],
+        }
+
     def team_to_engineered(self, team: list[dict]) -> np.ndarray:
         """Extract hand-crafted features for a single team.
 
-        Returns a flat feature vector. Requires pokemon_data to be loaded.
-        Features:
-        - Per-Pokemon type indicators (18 * 6 = 108)
-        - Team type coverage offensive (18)
-        - Team type coverage defensive (18)
+        Features (team-level, compact):
+        - Type composition (18): count of Pokemon per type
+        - Offensive coverage (18): binary, can hit each type SE
+        - Defensive coverage (18): best resistance to each attacking type
         - Base stat aggregates (6 stats * 4 agg = 24)
+        - Speed tier distribution (5): count at speed brackets
+        - Total BST stats (3): mean BST, min BST, max BST
         - Role indicators (6)
-        - Hazard/utility flags (8)
-        Total: ~182 features per team
+        - Utility flags (8)
+        Total: ~100 features per team
         """
+        info = self._team_stats_vector(team)
         features = []
 
-        # Per-Pokemon type encoding
-        type_matrix = np.zeros((TEAM_SIZE, NUM_TYPES), dtype=np.float32)
-        base_stats = np.zeros((TEAM_SIZE, 6), dtype=np.float32)
+        # Type composition (18)
+        features.extend(info["type_counts"].tolist())
 
-        for i, pkmn in enumerate(team[:TEAM_SIZE]):
-            species_id = _to_id(pkmn.get("species", ""))
-
-            # Types
-            types = self._get_types(species_id)
-            for t in types:
-                if t in TYPE_TO_IDX:
-                    type_matrix[i, TYPE_TO_IDX[t]] = 1.0
-
-            # Base stats
-            stats = self._get_base_stats(species_id)
-            if stats:
-                for j, sn in enumerate(STAT_NAMES):
-                    base_stats[i, j] = stats.get(sn, 0) / 255.0  # normalize to [0,1]
-
-        # Flatten type matrix
-        features.extend(type_matrix.flatten().tolist())
-
-        # Offensive type coverage: for each type, does the team have SE moves?
+        # Offensive type coverage (18)
         off_coverage = np.zeros(NUM_TYPES, dtype=np.float32)
         for pkmn in team[:TEAM_SIZE]:
             for move_name in pkmn.get("moves", []):
@@ -220,32 +234,51 @@ class FeatureExtractor:
                             off_coverage[def_idx] = 1.0
         features.extend(off_coverage.tolist())
 
-        # Defensive type coverage: for each attacking type, team's best resistance
+        # Defensive coverage (18)
         def_coverage = np.zeros(NUM_TYPES, dtype=np.float32)
         for atk_idx, atk_type in enumerate(TYPES):
-            best_resist = 4.0  # worst case
-            for pkmn in team[:TEAM_SIZE]:
-                types = self._get_types(_to_id(pkmn.get("species", "")))
+            best_resist = 4.0
+            for types in info["types_list"]:
                 if types:
                     eff = type_effectiveness_against(atk_type, types)
                     best_resist = min(best_resist, eff)
             def_coverage[atk_idx] = best_resist
         features.extend(def_coverage.tolist())
 
-        # Base stat aggregates: mean, std, min, max over team
+        # Base stat aggregates (24)
+        stats_matrix = np.zeros((len(info["base_stats_list"]), 6), dtype=np.float32)
+        for i, stats in enumerate(info["base_stats_list"]):
+            for j, sn in enumerate(STAT_NAMES):
+                stats_matrix[i, j] = stats.get(sn, 0) / 255.0
         for stat_idx in range(6):
-            stat_vals = base_stats[:len(team[:TEAM_SIZE]), stat_idx]
-            if len(stat_vals) > 0:
+            col = stats_matrix[:, stat_idx]
+            if len(col) > 0:
                 features.extend([
-                    float(np.mean(stat_vals)),
-                    float(np.std(stat_vals)),
-                    float(np.min(stat_vals)),
-                    float(np.max(stat_vals)),
+                    float(np.mean(col)), float(np.std(col)),
+                    float(np.min(col)), float(np.max(col)),
                 ])
             else:
                 features.extend([0.0, 0.0, 0.0, 0.0])
 
-        # Role indicators
+        # Speed tier distribution (5 brackets)
+        speeds = info["speeds"]
+        speed_brackets = [0, 60, 80, 100, 120]
+        for i in range(len(speed_brackets)):
+            lo = speed_brackets[i]
+            hi = speed_brackets[i + 1] if i + 1 < len(speed_brackets) else 999
+            features.append(sum(1 for s in speeds if lo <= s < hi) / max(len(speeds), 1))
+
+        # BST aggregates (3)
+        bsts = []
+        for stats in info["base_stats_list"]:
+            bst = sum(stats.get(sn, 0) for sn in STAT_NAMES)
+            bsts.append(bst / 720.0)  # normalize by ~max BST
+        if bsts:
+            features.extend([float(np.mean(bsts)), float(np.min(bsts)), float(np.max(bsts))])
+        else:
+            features.extend([0.0, 0.0, 0.0])
+
+        # Role indicators (6)
         roles = self._classify_roles(team[:TEAM_SIZE])
         features.extend([
             roles.get("physical_attacker", 0),
@@ -256,7 +289,7 @@ class FeatureExtractor:
             roles.get("support", 0),
         ])
 
-        # Utility flags
+        # Utility flags (8)
         utility = self._utility_flags(team[:TEAM_SIZE])
         features.extend([
             utility.get("has_hazards", 0),
@@ -272,15 +305,132 @@ class FeatureExtractor:
         return np.array(features, dtype=np.float32)
 
     def battle_to_engineered(self, battle: dict) -> tuple[np.ndarray, float]:
-        """Extract XGBoost features for a battle. Returns (features, label)."""
-        t1_feat = self.team_to_engineered(battle["team1"])
-        t2_feat = self.team_to_engineered(battle["team2"])
+        """Extract XGBoost features for a battle.
 
-        # Concatenate both teams + difference features
+        Includes per-team features + explicit matchup interaction features.
+        Returns (features, label).
+        """
+        t1 = battle["team1"][:TEAM_SIZE]
+        t2 = battle["team2"][:TEAM_SIZE]
+
+        t1_feat = self.team_to_engineered(t1)
+        t2_feat = self.team_to_engineered(t2)
         diff = t1_feat - t2_feat
-        features = np.concatenate([t1_feat, t2_feat, diff])
+
+        # Matchup interaction features
+        matchup_feat = self._matchup_features(t1, t2)
+
+        features = np.concatenate([t1_feat, t2_feat, diff, matchup_feat])
         label = 1.0 if battle["winner"] == 1 else 0.0
         return features, label
+
+    def _matchup_features(self, team1: list[dict], team2: list[dict]) -> np.ndarray:
+        """Compute explicit team1-vs-team2 interaction features.
+
+        - Speed advantage ratio
+        - Offensive pressure: how many of team2's Pokemon team1 can hit SE
+        - Defensive resilience: how many of team1's Pokemon resist team2's STAB
+        - Type advantage score
+        """
+        features = []
+
+        # Speed advantages
+        speeds1 = [self._get_base_stats(_to_id(p.get("species", ""))) or {} for p in team1]
+        speeds2 = [self._get_base_stats(_to_id(p.get("species", ""))) or {} for p in team2]
+        spe1 = [s.get("spe", 0) for s in speeds1]
+        spe2 = [s.get("spe", 0) for s in speeds2]
+
+        # Count how many of team1 outspeed how many of team2 (normalized)
+        speed_wins = 0
+        speed_total = 0
+        for s1 in spe1:
+            for s2 in spe2:
+                if s1 > 0 or s2 > 0:
+                    speed_total += 1
+                    if s1 > s2:
+                        speed_wins += 1
+        features.append(speed_wins / max(speed_total, 1))
+
+        # Offensive pressure: for each team2 Pokemon, can team1 hit it SE?
+        se_count = 0
+        for p2 in team2:
+            types2 = self._get_types(_to_id(p2.get("species", "")))
+            if not types2:
+                continue
+            hit_se = False
+            for p1 in team1:
+                for move_name in p1.get("moves", []):
+                    move_data = self._get_move(move_name)
+                    if move_data and move_data.get("category") != "Status":
+                        eff = type_effectiveness_against(move_data.get("type", ""), types2)
+                        if eff >= 2.0:
+                            hit_se = True
+                            break
+                if hit_se:
+                    break
+            if hit_se:
+                se_count += 1
+        features.append(se_count / max(len(team2), 1))
+
+        # Reverse: team2's offensive pressure on team1
+        se_count_rev = 0
+        for p1 in team1:
+            types1 = self._get_types(_to_id(p1.get("species", "")))
+            if not types1:
+                continue
+            hit_se = False
+            for p2 in team2:
+                for move_name in p2.get("moves", []):
+                    move_data = self._get_move(move_name)
+                    if move_data and move_data.get("category") != "Status":
+                        eff = type_effectiveness_against(move_data.get("type", ""), types1)
+                        if eff >= 2.0:
+                            hit_se = True
+                            break
+                if hit_se:
+                    break
+            if hit_se:
+                se_count_rev += 1
+        features.append(se_count_rev / max(len(team1), 1))
+
+        # STAB resistance: for each team2 Pokemon's STAB types, how many team1 Pokemon resist?
+        resist_score = 0
+        resist_total = 0
+        for p2 in team2:
+            types2 = self._get_types(_to_id(p2.get("species", "")))
+            for stab_type in types2:
+                resist_total += 1
+                for p1 in team1:
+                    types1 = self._get_types(_to_id(p1.get("species", "")))
+                    if types1:
+                        eff = type_effectiveness_against(stab_type, types1)
+                        if eff < 1.0:
+                            resist_score += 1
+                            break
+        features.append(resist_score / max(resist_total, 1))
+
+        # Reverse: team1's STAB resisted by team2
+        resist_score_rev = 0
+        resist_total_rev = 0
+        for p1 in team1:
+            types1 = self._get_types(_to_id(p1.get("species", "")))
+            for stab_type in types1:
+                resist_total_rev += 1
+                for p2 in team2:
+                    types2 = self._get_types(_to_id(p2.get("species", "")))
+                    if types2:
+                        eff = type_effectiveness_against(stab_type, types2)
+                        if eff < 1.0:
+                            resist_score_rev += 1
+                            break
+        features.append(resist_score_rev / max(resist_total_rev, 1))
+
+        # BST advantage
+        bst1 = sum(sum(s.get(sn, 0) for sn in STAT_NAMES) for s in speeds1) / max(len(team1), 1)
+        bst2 = sum(sum(s.get(sn, 0) for sn in STAT_NAMES) for s in speeds2) / max(len(team2), 1)
+        features.append((bst1 - bst2) / 720.0)
+
+        return np.array(features, dtype=np.float32)
 
     # ------------------------------------------------------------------
     # Helper methods

@@ -49,6 +49,15 @@ class MetaAnalyzer:
                 return await self._teams_from_replays(format_id, n_teams)
 
         raw_data = await self.db.get_usage_stats(format_id, year_month, rating_threshold)
+        # Fall back to lower rating thresholds if high-level stats unavailable
+        if raw_data is None:
+            for fallback_rating in [1760, 1630, 1500, 0]:
+                if fallback_rating >= rating_threshold:
+                    continue
+                raw_data = await self.db.get_usage_stats(format_id, year_month, fallback_rating)
+                if raw_data is not None:
+                    log.info("Using fallback rating threshold %d for %s", fallback_rating, format_id)
+                    break
         if raw_data is None:
             log.warning("No stats for %s %s", format_id, year_month)
             return await self._teams_from_replays(format_id, n_teams)
@@ -141,39 +150,104 @@ class MetaAnalyzer:
         return team
 
     def _build_pokemon_set(self, species: str, data: dict) -> dict:
-        """Build a Pokemon set dict from usage statistics.
+        """Build a single Pokemon set from usage statistics (most popular)."""
+        sets = self.build_pokemon_sets(species, data, max_sets=1)
+        return sets[0] if sets else {
+            "species": species, "ability": None, "item": None,
+            "moves": [], "nature": None, "tera_type": None,
+        }
 
-        Picks the most common moves, item, and ability.
+    def build_pokemon_sets(
+        self, species: str, data: dict, max_sets: int = 4
+    ) -> list[dict]:
+        """Generate multiple viable sets for a Pokemon from usage data.
+
+        Produces distinct sets by varying items, abilities, and move combinations.
         """
-        # Top ability
         abilities = data.get("abilities", {})
-        ability = max(abilities, key=abilities.get) if abilities else None
-
-        # Top item
         items = data.get("items", {})
-        item = max(items, key=items.get) if items else None
-
-        # Top 4 moves
         moves_data = data.get("moves", {})
-        top_moves = sorted(moves_data.items(), key=lambda x: x[1], reverse=True)[:4]
-        moves = [m for m, _ in top_moves]
-
-        # Top spread -> extract nature (first part before '/')
         spreads = data.get("spreads", {})
+
+        top_abilities = sorted(abilities.items(), key=lambda x: x[1], reverse=True)[:3]
+        top_items = sorted(items.items(), key=lambda x: x[1], reverse=True)[:4]
+        top_moves = sorted(moves_data.items(), key=lambda x: x[1], reverse=True)[:10]
+
+        # Extract nature from top spread
         nature = None
         if spreads:
             top_spread = max(spreads, key=spreads.get)
             if ":" in top_spread:
                 nature = top_spread.split(":")[0]
 
-        return {
-            "species": species,
-            "ability": ability,
-            "item": item,
-            "moves": moves,
-            "nature": nature,
+        sets = []
+        seen_keys = set()
+
+        # Generate sets by combining top items with top abilities
+        for item, _ in (top_items or [(None, 0)]):
+            for ability, _ in (top_abilities or [(None, 0)]):
+                if len(sets) >= max_sets:
+                    break
+                # Pick top 4 moves
+                moveset = [m for m, _ in top_moves[:4]]
+                key = (ability, item, tuple(sorted(moveset)))
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                sets.append({
+                    "species": species,
+                    "ability": ability,
+                    "item": item,
+                    "moves": moveset,
+                    "nature": nature,
+                    "tera_type": None,
+                })
+
+        # Also generate a set with alternate moves (5-8 instead of 1-4)
+        if len(top_moves) > 4 and len(sets) < max_sets:
+            alt_moves = [m for m, _ in top_moves[2:6]]  # overlap by 2
+            ability = top_abilities[0][0] if top_abilities else None
+            item = top_items[0][0] if top_items else None
+            key = (ability, item, tuple(sorted(alt_moves)))
+            if key not in seen_keys:
+                sets.append({
+                    "species": species,
+                    "ability": ability,
+                    "item": item,
+                    "moves": alt_moves,
+                    "nature": nature,
+                    "tera_type": None,
+                })
+
+        return sets if sets else [{
+            "species": species, "ability": None, "item": None,
+            "moves": [m for m, _ in top_moves[:4]], "nature": nature,
             "tera_type": None,
-        }
+        }]
+
+    def build_full_pokemon_pool(
+        self, usage: dict[str, dict], top_n: int = 80, sets_per_pokemon: int = 4
+    ) -> list[dict]:
+        """Build a rich pool of Pokemon sets from usage data.
+
+        Returns hundreds of distinct (species, moveset, item, ability) combinations.
+        """
+        sorted_pokemon = sorted(
+            usage.items(),
+            key=lambda x: x[1]["usage_pct"],
+            reverse=True,
+        )[:top_n]
+
+        pool = []
+        for species_id, data in sorted_pokemon:
+            sets = self.build_pokemon_sets(species_id, data, max_sets=sets_per_pokemon)
+            pool.extend(sets)
+
+        log.info(
+            "Built Pokemon pool: %d sets across %d species",
+            len(pool), len(set(p["species"] for p in pool)),
+        )
+        return pool
 
     async def _teams_from_replays(
         self, format_id: str, n_teams: int

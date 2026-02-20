@@ -151,9 +151,24 @@ async def main():
         await db.close()
         return
 
-    # Build pokemon pool from usage stats
+    # Build rich pokemon pool from usage stats (multiple sets per Pokemon)
     log.info("Building Pokemon pool from usage data...")
-    pokemon_pool = _build_pool_from_meta(meta_teams, pkmn_data)
+    year_month = await db.get_latest_usage_month(args.format)
+    raw_usage = None
+    if year_month:
+        for rating in [1825, 1760, 1630, 1500, 0]:
+            raw_usage = await db.get_usage_stats(args.format, year_month, rating)
+            if raw_usage:
+                log.info("Using usage stats at rating threshold %d", rating)
+                break
+    if raw_usage:
+        from showdown.scraper.stats_scraper import StatsScraper
+        usage_parsed = StatsScraper(db).parse_usage_data(raw_usage)
+        pokemon_pool = meta_analyzer.build_full_pokemon_pool(
+            usage_parsed, top_n=80, sets_per_pokemon=4
+        )
+    else:
+        pokemon_pool = _build_pool_from_meta(meta_teams, pkmn_data)
     log.info("Pokemon pool: %d sets across %d species",
              len(pokemon_pool),
              len(set(p["species"] for p in pokemon_pool)))

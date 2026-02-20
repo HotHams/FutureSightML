@@ -139,8 +139,7 @@ class Database:
             JOIN battle_teams t2 ON t2.replay_id = r.id AND t2.player_num = 2
             WHERE r.format = ?
               AND r.winner IN (1, 2)
-              AND COALESCE(r.rating1, 0) >= ?
-              AND COALESCE(r.rating2, 0) >= ?
+              AND (COALESCE(r.rating1, 0) >= ? OR COALESCE(r.rating2, 0) >= ?)
         """
         params: list[Any] = [format_id, min_rating, min_rating]
         if limit:

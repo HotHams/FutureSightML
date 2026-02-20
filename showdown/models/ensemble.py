@@ -28,7 +28,7 @@ class EnsemblePredictor:
         neural_model: WinPredictor | None = None,
         xgb_model: XGBPredictor | None = None,
         feature_extractor: FeatureExtractor | None = None,
-        neural_weight: float = 0.6,
+        neural_weight: float = 0.85,
         device: str = "cpu",
     ):
         self.neural_model = neural_model

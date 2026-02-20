@@ -114,10 +114,10 @@ class GeneticTeamBuilder:
             if progress_callback:
                 progress_callback(gen, best_fitness, avg_fitness)
 
-            # Check convergence
-            if gen > 50 and best_fitness > 0.5:
-                top_5_fitness = [f for _, f in fitness_scores[:5]]
-                if max(top_5_fitness) - min(top_5_fitness) < 0.001:
+            # Check convergence — require longer runs for more diversity
+            if gen > 100 and best_fitness > 0.5:
+                top_10_fitness = [f for _, f in fitness_scores[:10]]
+                if max(top_10_fitness) - min(top_10_fitness) < 0.0005:
                     log.info("Converged at generation %d", gen)
                     break
 
@@ -154,9 +154,41 @@ class GeneticTeamBuilder:
 
             population = new_population[:self.population_size]
 
-        # Final results
+        # Final results — select diverse top teams
         best_ever.sort(key=lambda x: x["fitness"], reverse=True)
-        return best_ever[:n_results]
+        return self._select_diverse_results(best_ever, n_results)
+
+    def _select_diverse_results(
+        self, candidates: list[dict], n: int
+    ) -> list[dict]:
+        """Select top N results maximizing both fitness and diversity."""
+        if len(candidates) <= n:
+            return candidates
+
+        selected = [candidates[0]]  # Always take the best
+        for candidate in candidates[1:]:
+            if len(selected) >= n:
+                break
+            # Check species overlap with all selected teams
+            cand_species = {_to_id(p.get("species", "")) for p in candidate["team"]}
+            max_overlap = 0
+            for sel in selected:
+                sel_species = {_to_id(p.get("species", "")) for p in sel["team"]}
+                overlap = len(cand_species & sel_species)
+                max_overlap = max(max_overlap, overlap)
+            # Accept if at least 2 different Pokemon from every selected team
+            if max_overlap <= 4:
+                selected.append(candidate)
+
+        # If we couldn't find enough diverse teams, fill from remaining
+        if len(selected) < n:
+            for candidate in candidates:
+                if candidate not in selected:
+                    selected.append(candidate)
+                if len(selected) >= n:
+                    break
+
+        return selected[:n]
 
     def _init_population(self) -> list[list[dict]]:
         """Create initial random population of legal teams."""

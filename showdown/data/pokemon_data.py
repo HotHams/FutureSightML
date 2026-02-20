@@ -1,4 +1,7 @@
-"""Loader for static Pokemon data from the Showdown data repository."""
+"""Loader for static Pokemon data from the Showdown data repository.
+
+Uses clean JSON endpoints where available, falls back to TS parsing.
+"""
 
 import json
 import logging
@@ -12,11 +15,15 @@ log = logging.getLogger("showdown.data.pokemon_data")
 
 DATA_CACHE_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "raw"
 
-# URLs for raw Showdown data (TypeScript source)
+# Clean JSON endpoints (served by the Showdown client)
+_JSON_ENDPOINTS = {
+    "pokedex": "https://play.pokemonshowdown.com/data/pokedex.json",
+    "moves": "https://play.pokemonshowdown.com/data/moves.json",
+}
+
+# TypeScript sources (for data without JSON endpoints)
 _SHOWDOWN_BASE = "https://raw.githubusercontent.com/smogon/pokemon-showdown/master/data"
-_ENDPOINTS = {
-    "pokedex": f"{_SHOWDOWN_BASE}/pokedex.ts",
-    "moves": f"{_SHOWDOWN_BASE}/moves.ts",
+_TS_ENDPOINTS = {
     "items": f"{_SHOWDOWN_BASE}/items.ts",
     "abilities": f"{_SHOWDOWN_BASE}/abilities.ts",
     "typechart": f"{_SHOWDOWN_BASE}/typechart.ts",
@@ -30,19 +37,17 @@ def _to_id(name: str) -> str:
 
 
 def _parse_ts_object(text: str) -> dict[str, Any]:
-    """Best-effort parse of a Showdown TypeScript data export into a Python dict.
+    """Parse a Showdown TypeScript data export into a Python dict.
 
-    The TS files export a large object literal. We extract it and use a lenient
-    JSON-like parse (handling trailing commas, unquoted keys, single-line
-    comments, etc.).
+    Handles unquoted keys (including numeric), trailing commas,
+    single quotes, template literals, and TS type annotations.
     """
-    # Remove single-line comments
+    # Remove single-line comments (but not inside strings)
     text = re.sub(r"//[^\n]*", "", text)
     # Remove multi-line comments
     text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
 
-    # Find the main object: everything after the first '=' and '{' up to the
-    # matching closing '};'
+    # Find the main object
     match = re.search(r"=\s*(\{)", text)
     if not match:
         raise ValueError("Could not locate object literal in TS source")
@@ -62,35 +67,50 @@ def _parse_ts_object(text: str) -> dict[str, Any]:
     obj_text = text[start:end]
 
     # Convert TS object literal to valid JSON:
-    # 1. Quote unquoted keys
-    obj_text = re.sub(r'(?<=[{,\n])\s*([a-zA-Z_]\w*)\s*:', r' "\1":', obj_text)
-    # 2. Remove trailing commas before } or ]
-    obj_text = re.sub(r",\s*([}\]])", r"\1", obj_text)
-    # 3. Replace single quotes with double quotes (for string values)
+    # 1. Replace single quotes with double quotes
     obj_text = obj_text.replace("'", '"')
-    # 4. Handle template literals (backticks) - just replace with double quotes
+    # 2. Handle template literals
     obj_text = obj_text.replace("`", '"')
-    # 5. Remove any remaining TypeScript type annotations
-    obj_text = re.sub(r"as\s+\w+[\[\]]*", "", obj_text)
+    # 3. Remove TS type annotations (as Type, as const, etc.)
+    obj_text = re.sub(r"\bas\s+\w+[\[\]]*", "", obj_text)
+    # 4. Quote ALL unquoted keys (alphabetic, numeric, underscore)
+    #    Match keys preceded by { , or newline that aren't already quoted
+    obj_text = re.sub(
+        r'(?<=[{,\n\t])\s*([a-zA-Z_]\w*)\s*:',
+        r' "\1":',
+        obj_text,
+    )
+    # Also handle numeric keys like  0: "Overgrow"
+    obj_text = re.sub(
+        r'(?<=[{,\n\t])\s*(\d+)\s*:',
+        r' "\1":',
+        obj_text,
+    )
+    # 5. Remove trailing commas before } or ]
+    obj_text = re.sub(r",\s*([}\]])", r"\1", obj_text)
+    # 6. Remove any remaining problematic constructs
+    # Handle spread operators or other JS features
+    obj_text = re.sub(r"\.\.\.\w+", '""', obj_text)
 
     try:
         return json.loads(obj_text)
     except json.JSONDecodeError as e:
-        log.warning("JSON parse failed, attempting line-by-line recovery: %s", e)
+        log.warning("Full JSON parse failed (%s), using entry-by-entry recovery", e)
         return _fallback_parse(obj_text)
 
 
 def _fallback_parse(text: str) -> dict[str, Any]:
-    """Fallback parser: extract top-level keys and their objects individually."""
+    """Fallback parser: extract top-level key:object entries one at a time."""
     result = {}
-    # Find top-level key: value pairs where value is an object
-    pattern = re.compile(r'"(\w+)":\s*\{', re.MULTILINE)
-    for m in pattern.finditer(text):
-        key = m.group(1)
-        start = m.end() - 1  # the opening brace
+    # Match top-level entries: "key": { ... }
+    # We need to handle both quoted and potentially unquoted keys
+    pattern = re.compile(r'["\s](\w+)"\s*:\s*\{', re.MULTILINE)
+    positions = [(m.group(1), m.end() - 1) for m in pattern.finditer(text)]
+
+    for key, brace_start in positions:
         depth = 0
-        end = start
-        for i in range(start, len(text)):
+        end = brace_start
+        for i in range(brace_start, len(text)):
             if text[i] == "{":
                 depth += 1
             elif text[i] == "}":
@@ -98,11 +118,16 @@ def _fallback_parse(text: str) -> dict[str, Any]:
                 if depth == 0:
                     end = i + 1
                     break
-        obj_str = text[start:end]
+        obj_str = text[brace_start:end]
         try:
             result[key] = json.loads(obj_str)
         except json.JSONDecodeError:
-            continue
+            # Try fixing common issues in this single entry
+            fixed = re.sub(r",\s*([}\]])", r"\1", obj_str)
+            try:
+                result[key] = json.loads(fixed)
+            except json.JSONDecodeError:
+                continue
     return result
 
 
@@ -122,13 +147,33 @@ class PokemonDataLoader:
     async def load(self, force_download: bool = False) -> None:
         """Download and parse all data files."""
         async with aiohttp.ClientSession() as session:
-            for name, url in _ENDPOINTS.items():
+            # Phase 1: Load from clean JSON endpoints
+            for name, url in _JSON_ENDPOINTS.items():
+                cache_file = self.cache_dir / f"{name}.json"
+
+                if cache_file.exists() and not force_download:
+                    raw = cache_file.read_text(encoding="utf-8")
+                else:
+                    log.info("Downloading %s from Showdown client (JSON)...", name)
+                    async with session.get(url) as resp:
+                        if resp.status != 200:
+                            log.error("Failed to download %s: HTTP %d", name, resp.status)
+                            continue
+                        raw = await resp.text()
+                    cache_file.write_text(raw, encoding="utf-8")
+
+                parsed = json.loads(raw)
+                setattr(self, name, parsed)
+                log.info("Loaded %s: %d entries (JSON)", name, len(parsed))
+
+            # Phase 2: Load from TS sources (items, abilities, typechart, formats)
+            for name, url in _TS_ENDPOINTS.items():
                 cache_file = self.cache_dir / f"{name}.ts"
 
                 if cache_file.exists() and not force_download:
                     raw = cache_file.read_text(encoding="utf-8")
                 else:
-                    log.info("Downloading %s from Showdown repo...", name)
+                    log.info("Downloading %s from Showdown repo (TS)...", name)
                     async with session.get(url) as resp:
                         if resp.status != 200:
                             log.error("Failed to download %s: HTTP %d", name, resp.status)
@@ -137,17 +182,31 @@ class PokemonDataLoader:
                     cache_file.write_text(raw, encoding="utf-8")
 
                 parsed = _parse_ts_object(raw)
-                setattr(self, name if name != "formats" else "formats_data", parsed)
-                log.info("Parsed %s: %d entries", name, len(parsed))
+                attr_name = name if name != "formats" else "formats_data"
+                setattr(self, attr_name, parsed)
+                log.info("Parsed %s: %d entries (TS)", name, len(parsed))
+
+        # Supplement abilities from pokedex data (TS parser misses most due to JS functions)
+        if len(self.abilities) < 100 and self.pokedex:
+            extracted = self._extract_abilities_from_pokedex()
+            if len(extracted) > len(self.abilities):
+                log.info(
+                    "Supplementing abilities from pokedex: %d -> %d entries",
+                    len(self.abilities), len(extracted),
+                )
+                self.abilities = extracted
 
         self._loaded = True
+        log.info(
+            "Data load complete: %d species, %d moves, %d items, %d abilities",
+            len(self.pokedex), len(self.moves), len(self.items), len(self.abilities),
+        )
 
     def ensure_loaded(self) -> None:
         if not self._loaded:
             raise RuntimeError("PokemonDataLoader not loaded. Call await loader.load() first.")
 
     def get_pokemon(self, name: str) -> dict[str, Any] | None:
-        """Look up a Pokemon by name or ID."""
         self.ensure_loaded()
         key = _to_id(name)
         return self.pokedex.get(key)
@@ -177,7 +236,6 @@ class PokemonDataLoader:
         return self.abilities.get(_to_id(name))
 
     def get_all_species(self) -> list[str]:
-        """Return all species IDs in the pokedex."""
         self.ensure_loaded()
         return list(self.pokedex.keys())
 
@@ -194,7 +252,6 @@ class PokemonDataLoader:
         return list(self.abilities.keys())
 
     def species_to_idx(self) -> dict[str, int]:
-        """Build a species -> index mapping for embeddings."""
         self.ensure_loaded()
         return {name: i + 1 for i, name in enumerate(sorted(self.pokedex.keys()))}
 
@@ -210,12 +267,18 @@ class PokemonDataLoader:
         self.ensure_loaded()
         return {name: i + 1 for i, name in enumerate(sorted(self.abilities.keys()))}
 
-    def get_tier_pokemon(self, tier: str) -> list[str]:
-        """Return species available in a given Smogon tier.
+    def _extract_abilities_from_pokedex(self) -> dict[str, Any]:
+        """Extract ability entries from pokedex data as a fallback."""
+        abilities = {}
+        for species_data in self.pokedex.values():
+            for ability_name in species_data.get("abilities", {}).values():
+                aid = _to_id(ability_name)
+                if aid and aid not in abilities:
+                    abilities[aid] = {"name": ability_name}
+        return abilities
 
-        Uses the formats-data file which contains tier assignments.
-        Falls back to returning all species if formats data is missing.
-        """
+    def get_tier_pokemon(self, tier: str) -> list[str]:
+        """Return species available in a given Smogon tier."""
         self.ensure_loaded()
         if not self.formats_data:
             return list(self.pokedex.keys())

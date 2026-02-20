@@ -168,12 +168,17 @@ async def main():
         )
 
         xgb_model = XGBPredictor(
-            n_estimators=xgb_cfg.get("n_estimators", 1000),
-            max_depth=xgb_cfg.get("max_depth", 8),
-            learning_rate=xgb_cfg.get("learning_rate", 0.05),
-            subsample=xgb_cfg.get("subsample", 0.8),
-            colsample_bytree=xgb_cfg.get("colsample_bytree", 0.8),
-            early_stopping_rounds=xgb_cfg.get("early_stopping_rounds", 50),
+            n_estimators=xgb_cfg.get("n_estimators", 2000),
+            max_depth=xgb_cfg.get("max_depth", 4),
+            learning_rate=xgb_cfg.get("learning_rate", 0.03),
+            subsample=xgb_cfg.get("subsample", 0.7),
+            colsample_bytree=xgb_cfg.get("colsample_bytree", 0.5),
+            colsample_bylevel=xgb_cfg.get("colsample_bylevel", 0.7),
+            min_child_weight=xgb_cfg.get("min_child_weight", 5),
+            gamma=xgb_cfg.get("gamma", 0.1),
+            reg_alpha=xgb_cfg.get("reg_alpha", 0.5),
+            reg_lambda=xgb_cfg.get("reg_lambda", 2.0),
+            early_stopping_rounds=xgb_cfg.get("early_stopping_rounds", 80),
         )
 
         xgb_metrics = trainer.train_xgboost(
