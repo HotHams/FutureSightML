@@ -1,0 +1,741 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FutureSightML - Pokemon Team Builder</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Inter:wght@300;400;500;600;700&display=swap');
+        :root { --bg-dark: #0f0f23; --bg-card: #1a1a2e; --bg-card-hover: #22223a; --accent: #e63946; --accent2: #457b9d; --gold: #f4d35e; }
+        body { background: var(--bg-dark); color: #e0e0e0; font-family: 'Inter', sans-serif; }
+        .pixel-font { font-family: 'Press Start 2P', monospace; }
+        .glass { background: rgba(26, 26, 46, 0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.08); }
+        .pokemon-card { transition: all 0.2s ease; }
+        .pokemon-card:hover { transform: translateY(-4px); box-shadow: 0 8px 25px rgba(230, 57, 70, 0.15); }
+        .type-badge { padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+        .sprite-container { image-rendering: pixelated; }
+        .glow { box-shadow: 0 0 20px rgba(230, 57, 70, 0.3); }
+        .progress-bar { background: linear-gradient(90deg, #e63946, #457b9d); }
+        ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: #0f0f23; } ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+        .stat-bar { height: 6px; border-radius: 3px; transition: width 0.5s ease; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .fade-in { animation: fadeIn 0.3s ease forwards; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .animate-pulse { animation: pulse 2s ease-in-out infinite; }
+        .pokeball-spinner { width: 40px; height: 40px; border-radius: 50%; border: 3px solid #e63946; border-top-color: white; animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: { extend: { colors: { dark: { 900: '#0f0f23', 800: '#1a1a2e', 700: '#22223a', 600: '#2d2d44' }, accent: '#e63946', accent2: '#457b9d', gold: '#f4d35e' } } }
+        };
+    </script>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel" data-type="module">
+const { useState, useEffect, useCallback, useRef } = React;
+
+const API = window.location.origin + '/api';
+
+const TYPE_COLORS = {
+    Normal:'#A8A878',Fire:'#F08030',Water:'#6890F0',Electric:'#F8D030',Grass:'#78C850',
+    Ice:'#98D8D8',Fighting:'#C03028',Poison:'#A040A0',Ground:'#E0C068',Flying:'#A890F0',
+    Psychic:'#F85888',Bug:'#A8B820',Rock:'#B8A038',Ghost:'#705898',Dragon:'#7038F8',
+    Dark:'#705848',Steel:'#B8B8D0',Fairy:'#EE99AC',
+};
+
+function TypeBadge({ type }) {
+    const bg = TYPE_COLORS[type] || '#888';
+    return <span className="type-badge text-white" style={{ background: bg }}>{type}</span>;
+}
+
+function StatBar({ label, value, max = 255 }) {
+    const pct = Math.min((value / max) * 100, 100);
+    const color = value >= 120 ? '#4ade80' : value >= 80 ? '#fbbf24' : value >= 50 ? '#fb923c' : '#f87171';
+    return (
+        <div className="flex items-center gap-2 text-xs">
+            <span className="w-8 text-gray-400">{label}</span>
+            <div className="flex-1 bg-dark-700 rounded-full h-1.5">
+                <div className="stat-bar" style={{ width: `${pct}%`, background: color }} />
+            </div>
+            <span className="w-8 text-right font-mono">{value}</span>
+        </div>
+    );
+}
+
+function PokemonSprite({ species, size = 96, animated = false }) {
+    const name = (species || '').toLowerCase().replace(/[^a-z0-9-]/g, '');
+    const [src, setSrc] = useState('');
+    const [error, setError] = useState(false);
+
+    useEffect(() => {
+        setError(false);
+        if (animated) {
+            setSrc(`https://play.pokemonshowdown.com/sprites/ani/${name}.gif`);
+        } else {
+            setSrc(`https://play.pokemonshowdown.com/sprites/gen5/${name}.png`);
+        }
+    }, [name, animated]);
+
+    if (error || !name) {
+        return <div className="flex items-center justify-center bg-dark-700 rounded-lg" style={{ width: size, height: size }}>
+            <span className="text-2xl">?</span>
+        </div>;
+    }
+
+    return <img src={src} alt={species} className="sprite-container"
+                style={{ width: size, height: size, objectFit: 'contain' }}
+                onError={() => {
+                    if (animated) setSrc(`https://play.pokemonshowdown.com/sprites/gen5/${name}.png`);
+                    else setError(true);
+                }} />;
+}
+
+function PokemonCard({ pokemon, onClick, selected, compact }) {
+    if (compact) {
+        return (
+            <div onClick={onClick}
+                 className={`pokemon-card flex items-center gap-3 p-2 rounded-lg cursor-pointer ${selected ? 'glass glow' : 'bg-dark-700 hover:bg-dark-600'}`}>
+                <PokemonSprite species={pokemon.species} size={40} />
+                <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-sm truncate">{pokemon.species || pokemon.name}</div>
+                    <div className="flex gap-1 mt-0.5">
+                        {(pokemon.types || []).map(t => <TypeBadge key={t} type={t} />)}
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div onClick={onClick}
+             className={`pokemon-card glass rounded-xl p-4 cursor-pointer ${selected ? 'glow border-accent' : ''}`}>
+            <div className="flex items-center gap-3 mb-3">
+                <PokemonSprite species={pokemon.species} size={64} animated />
+                <div>
+                    <h3 className="font-bold text-lg">{pokemon.species}</h3>
+                    <div className="flex gap-1 mt-1">
+                        {(pokemon.types || []).map(t => <TypeBadge key={t} type={t} />)}
+                    </div>
+                </div>
+            </div>
+            {pokemon.ability && <div className="text-xs text-gray-400 mb-1">Ability: <span className="text-gray-200">{pokemon.ability}</span></div>}
+            {pokemon.item && <div className="text-xs text-gray-400 mb-1">Item: <span className="text-gray-200">{pokemon.item}</span></div>}
+            {pokemon.tera_type && <div className="text-xs text-gray-400 mb-2">Tera: <span className="text-gray-200">{pokemon.tera_type}</span></div>}
+            {pokemon.moves && pokemon.moves.length > 0 && (
+                <div className="grid grid-cols-2 gap-1 mt-2">
+                    {pokemon.moves.map((m, i) => (
+                        <div key={i} className="text-xs bg-dark-700 rounded px-2 py-1 text-center truncate">{m}</div>
+                    ))}
+                </div>
+            )}
+            {pokemon.baseStats && (
+                <div className="mt-3 space-y-1">
+                    {Object.entries(pokemon.baseStats).map(([k, v]) => (
+                        <StatBar key={k} label={k.toUpperCase().slice(0,3)} value={v} />
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function TeamSlot({ pokemon, index, onRemove }) {
+    if (!pokemon) {
+        return (
+            <div className="glass rounded-xl p-4 flex items-center justify-center h-28 border-2 border-dashed border-dark-600">
+                <span className="text-gray-500 text-sm">Slot {index + 1}</span>
+            </div>
+        );
+    }
+
+    return (
+        <div className="glass rounded-xl p-3 relative group fade-in">
+            <button onClick={() => onRemove(index)}
+                    className="absolute -top-2 -right-2 w-6 h-6 bg-red-600 rounded-full text-xs font-bold opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                X
+            </button>
+            <div className="flex items-center gap-2">
+                <PokemonSprite species={pokemon.species} size={48} animated />
+                <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-sm truncate">{pokemon.species}</div>
+                    {pokemon.item && <div className="text-xs text-gray-400 truncate">@ {pokemon.item}</div>}
+                    {pokemon.ability && <div className="text-xs text-gray-500 truncate">{pokemon.ability}</div>}
+                </div>
+            </div>
+            {pokemon.moves && (
+                <div className="grid grid-cols-2 gap-0.5 mt-2">
+                    {pokemon.moves.map((m, i) => (
+                        <div key={i} className="text-[10px] bg-dark-700 rounded px-1 py-0.5 text-center truncate text-gray-300">{m}</div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function GeneratePanel({ format, onTeamGenerated }) {
+    const [loading, setLoading] = useState(false);
+    const [progress, setProgress] = useState('');
+    const [settings, setSettings] = useState({ population: 200, generations: 300, n_results: 5 });
+
+    async function generate() {
+        setLoading(true);
+        setProgress('Evolving teams...');
+        try {
+            const res = await fetch(`${API}/team/generate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ format_id: format, ...settings }),
+            });
+            if (!res.ok) throw new Error(await res.text());
+            const data = await res.json();
+            onTeamGenerated(data.teams);
+            setProgress(`Generated ${data.teams.length} teams!`);
+        } catch (e) {
+            setProgress(`Error: ${e.message}`);
+        }
+        setLoading(false);
+    }
+
+    return (
+        <div className="glass rounded-xl p-4">
+            <h3 className="font-bold text-lg mb-3 flex items-center gap-2">
+                <span className="text-accent">AI</span> Team Generator
+            </h3>
+            <div className="grid grid-cols-3 gap-3 mb-3">
+                <div>
+                    <label className="text-xs text-gray-400 block mb-1">Population</label>
+                    <input type="number" value={settings.population}
+                           onChange={e => setSettings({...settings, population: +e.target.value})}
+                           className="w-full bg-dark-700 rounded px-2 py-1 text-sm" />
+                </div>
+                <div>
+                    <label className="text-xs text-gray-400 block mb-1">Generations</label>
+                    <input type="number" value={settings.generations}
+                           onChange={e => setSettings({...settings, generations: +e.target.value})}
+                           className="w-full bg-dark-700 rounded px-2 py-1 text-sm" />
+                </div>
+                <div>
+                    <label className="text-xs text-gray-400 block mb-1"># Teams</label>
+                    <input type="number" value={settings.n_results}
+                           onChange={e => setSettings({...settings, n_results: +e.target.value})}
+                           className="w-full bg-dark-700 rounded px-2 py-1 text-sm" />
+                </div>
+            </div>
+            <button onClick={generate} disabled={loading}
+                    className="w-full bg-accent hover:bg-red-700 disabled:bg-gray-600 text-white font-bold py-2 rounded-lg transition-colors flex items-center justify-center gap-2">
+                {loading ? <><div className="pokeball-spinner" style={{width:20,height:20,borderWidth:2}} /> Generating...</>
+                         : 'Generate Optimal Teams'}
+            </button>
+            {progress && <p className="text-xs text-gray-400 mt-2 text-center">{progress}</p>}
+        </div>
+    );
+}
+
+function ImportExportPanel({ team, format, onImport }) {
+    const [paste, setPaste] = useState('');
+    const [exportText, setExportText] = useState('');
+    const [mode, setMode] = useState('import');
+
+    async function handleImport() {
+        try {
+            const res = await fetch(`${API}/team/import`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ format_id: format, paste }),
+            });
+            const data = await res.json();
+            if (data.team) onImport(data.team);
+        } catch (e) {
+            alert('Import failed: ' + e.message);
+        }
+    }
+
+    async function handleExport() {
+        try {
+            const res = await fetch(`${API}/team/export`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ team }),
+            });
+            const data = await res.json();
+            setExportText(data.paste);
+            setMode('export');
+        } catch (e) {
+            alert('Export failed: ' + e.message);
+        }
+    }
+
+    return (
+        <div className="glass rounded-xl p-4">
+            <div className="flex gap-2 mb-3">
+                <button onClick={() => setMode('import')}
+                        className={`px-3 py-1 rounded text-sm font-semibold ${mode === 'import' ? 'bg-accent text-white' : 'bg-dark-700 text-gray-400'}`}>Import</button>
+                <button onClick={() => { setMode('export'); handleExport(); }}
+                        className={`px-3 py-1 rounded text-sm font-semibold ${mode === 'export' ? 'bg-accent text-white' : 'bg-dark-700 text-gray-400'}`}>Export</button>
+            </div>
+            {mode === 'import' ? (
+                <>
+                    <textarea value={paste} onChange={e => setPaste(e.target.value)}
+                              placeholder="Paste your Showdown team here..."
+                              className="w-full bg-dark-700 rounded p-2 text-xs font-mono h-32 resize-none" />
+                    <button onClick={handleImport} className="mt-2 w-full bg-accent2 hover:bg-blue-700 text-white py-1.5 rounded text-sm font-semibold">
+                        Import Team
+                    </button>
+                </>
+            ) : (
+                <>
+                    <textarea value={exportText} readOnly
+                              className="w-full bg-dark-700 rounded p-2 text-xs font-mono h-32 resize-none" />
+                    <button onClick={() => { navigator.clipboard.writeText(exportText); }}
+                            className="mt-2 w-full bg-accent2 hover:bg-blue-700 text-white py-1.5 rounded text-sm font-semibold">
+                        Copy to Clipboard
+                    </button>
+                </>
+            )}
+        </div>
+    );
+}
+
+function EvaluationPanel({ team, format }) {
+    const [evaluation, setEvaluation] = useState(null);
+    const [loading, setLoading] = useState(false);
+
+    async function evaluate() {
+        if (team.filter(Boolean).length === 0) return;
+        setLoading(true);
+        try {
+            const res = await fetch(`${API}/team/evaluate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ format_id: format, team: team.filter(Boolean) }),
+            });
+            const data = await res.json();
+            setEvaluation(data);
+        } catch (e) {
+            console.error(e);
+        }
+        setLoading(false);
+    }
+
+    useEffect(() => {
+        const filled = team.filter(Boolean);
+        if (filled.length >= 1) evaluate();
+    }, [team]);
+
+    if (!evaluation) return null;
+
+    const wr = evaluation.overall_winrate;
+    const wrColor = wr >= 55 ? 'text-green-400' : wr >= 45 ? 'text-yellow-400' : 'text-red-400';
+
+    return (
+        <div className="glass rounded-xl p-4 fade-in">
+            <h3 className="font-bold mb-2">Team Evaluation</h3>
+            <div className="text-center mb-3">
+                <div className={`text-3xl font-bold ${wrColor}`}>{wr}%</div>
+                <div className="text-xs text-gray-400">Predicted Win Rate</div>
+            </div>
+            <div className="flex justify-between text-xs text-gray-400 mb-2">
+                <span>Favorable: {evaluation.matchups_above_50}/{evaluation.total_matchups}</span>
+            </div>
+            <div className="w-full bg-dark-700 rounded-full h-2 mb-3">
+                <div className="progress-bar h-2 rounded-full" style={{ width: `${wr}%` }} />
+            </div>
+            {evaluation.worst_matchups && evaluation.worst_matchups.length > 0 && (
+                <div className="mt-2">
+                    <div className="text-xs text-gray-500 mb-1">Worst matchups:</div>
+                    {evaluation.worst_matchups.slice(0, 3).map((m, i) => (
+                        <div key={i} className="flex items-center justify-between text-xs py-1">
+                            <span className="text-gray-300 truncate">{m.opponent.join(', ')}</span>
+                            <span className={m.win_prob < 45 ? 'text-red-400' : 'text-yellow-400'}>{m.win_prob}%</span>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function AnalysisPanel({ team, format }) {
+    const [analysis, setAnalysis] = useState(null);
+    const [loading, setLoading] = useState(false);
+    const [expanded, setExpanded] = useState(false);
+
+    async function runAnalysis() {
+        if (team.filter(Boolean).length === 0) return;
+        setLoading(true);
+        try {
+            const res = await fetch(`${API}/team/analyze/full`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ format_id: format, team: team.filter(Boolean) }),
+            });
+            const data = await res.json();
+            setAnalysis(data);
+            setExpanded(true);
+        } catch (e) { console.error(e); }
+        setLoading(false);
+    }
+
+    return (
+        <div className="glass rounded-xl p-4">
+            <button onClick={runAnalysis} disabled={loading || team.filter(Boolean).length === 0}
+                    className="w-full bg-accent2 hover:bg-blue-700 disabled:bg-gray-600 text-white font-bold py-2 rounded-lg text-sm flex items-center justify-center gap-2">
+                {loading ? <><div className="pokeball-spinner" style={{width:16,height:16,borderWidth:2}} /> Analyzing...</>
+                         : 'Deep Analysis'}
+            </button>
+
+            {analysis && expanded && (
+                <div className="mt-3 space-y-3 fade-in">
+                    {/* Archetype */}
+                    {analysis.archetype && (
+                        <div className="bg-dark-700 rounded-lg p-3">
+                            <div className="text-xs text-gray-500 mb-1">Archetype</div>
+                            <div className="font-bold text-accent text-sm">{analysis.archetype.archetype}</div>
+                            <div className="grid grid-cols-3 gap-1 mt-2 text-xs text-gray-400">
+                                <span>Setup: {analysis.archetype.stats.setup_count}</span>
+                                <span>Hazards: {analysis.archetype.stats.hazards}</span>
+                                <span>Pivots: {analysis.archetype.stats.pivots}</span>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Speed Tiers */}
+                    {analysis.speed_tiers && (
+                        <div className="bg-dark-700 rounded-lg p-3">
+                            <div className="text-xs text-gray-500 mb-2">Speed Tiers</div>
+                            {analysis.speed_tiers.map((st, i) => (
+                                <div key={i} className="flex items-center justify-between text-xs py-1 border-b border-dark-600 last:border-0">
+                                    <div className="flex items-center gap-2">
+                                        <PokemonSprite species={st.species} size={24} />
+                                        <span className="text-gray-200">{st.species}</span>
+                                    </div>
+                                    <div className="text-right">
+                                        <span className="text-gray-300 font-mono">{st.max_speed}</span>
+                                        <span className="text-gray-500 ml-1">({st.base_speed} base)</span>
+                                        {st.scarf_speed && <span className="text-yellow-400 ml-1">Scarf:{st.scarf_speed}</span>}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    {/* Coverage */}
+                    {analysis.coverage && (
+                        <div className="bg-dark-700 rounded-lg p-3">
+                            <div className="text-xs text-gray-500 mb-2">Type Coverage</div>
+                            {analysis.coverage.uncovered_types.length > 0 && (
+                                <div className="mb-2">
+                                    <span className="text-xs text-red-400">Can't hit SE: </span>
+                                    <div className="flex gap-1 flex-wrap mt-1">
+                                        {analysis.coverage.uncovered_types.map(t => <TypeBadge key={t} type={t} />)}
+                                    </div>
+                                </div>
+                            )}
+                            {analysis.coverage.unresisted_types.length > 0 && (
+                                <div>
+                                    <span className="text-xs text-yellow-400">No resist for: </span>
+                                    <div className="flex gap-1 flex-wrap mt-1">
+                                        {analysis.coverage.unresisted_types.map(t => <TypeBadge key={t} type={t} />)}
+                                    </div>
+                                </div>
+                            )}
+                            {analysis.coverage.uncovered_types.length === 0 && analysis.coverage.unresisted_types.length === 0 && (
+                                <div className="text-xs text-green-400">Full coverage!</div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* Tera Suggestions */}
+                    {analysis.tera_suggestions && (
+                        <div className="bg-dark-700 rounded-lg p-3">
+                            <div className="text-xs text-gray-500 mb-2">Tera Suggestions</div>
+                            {analysis.tera_suggestions.map((ts, i) => (
+                                ts.suggestions.length > 0 && (
+                                    <div key={i} className="flex items-center gap-2 text-xs py-1">
+                                        <span className="text-gray-300 w-20 truncate">{ts.species}</span>
+                                        <div className="flex gap-1">
+                                            {ts.suggestions.slice(0, 2).map((s, j) => (
+                                                <span key={j} title={s.reason}>
+                                                    <TypeBadge type={s.type} />
+                                                </span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )
+                            ))}
+                        </div>
+                    )}
+
+                    {/* Threats */}
+                    {analysis.threats && analysis.threats.threats && (
+                        <div className="bg-dark-700 rounded-lg p-3">
+                            <div className="text-xs text-gray-500 mb-2">Top Threats</div>
+                            <div className="flex gap-1 flex-wrap">
+                                {analysis.threats.threats.slice(0, 6).map((t, i) => (
+                                    <div key={i} className="flex flex-col items-center">
+                                        <PokemonSprite species={t.species} size={32} />
+                                        <span className="text-[9px] text-red-400">{t.threat_score}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function MetaPage({ format }) {
+    const [meta, setMeta] = useState(null);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        async function load() {
+            try {
+                const res = await fetch(`${API}/meta/${format}`);
+                const data = await res.json();
+                setMeta(data);
+            } catch (e) { console.error(e); }
+            setLoading(false);
+        }
+        load();
+    }, [format]);
+
+    if (loading) return <div className="flex items-center justify-center py-20"><div className="pokeball-spinner" /></div>;
+    if (!meta) return <div className="text-center text-gray-400 py-10">No meta data available</div>;
+
+    return (
+        <div className="space-y-6 fade-in">
+            <div className="glass rounded-xl p-4">
+                <h3 className="font-bold text-lg mb-1">Metagame Overview</h3>
+                <div className="text-sm text-gray-400">{meta.pool_size} Pokemon sets | {meta.total_meta_teams} meta teams</div>
+            </div>
+
+            <div className="glass rounded-xl p-4">
+                <h3 className="font-bold mb-3">Top Pokemon</h3>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+                    {meta.top_pokemon.slice(0, 20).map((p, i) => (
+                        <div key={i} className="flex items-center gap-2 bg-dark-700 rounded-lg p-2">
+                            <span className="text-xs text-gray-500 w-5">#{i+1}</span>
+                            <PokemonSprite species={p.species} size={40} />
+                            <div className="min-w-0">
+                                <div className="text-sm font-semibold truncate">{p.species}</div>
+                                <div className="text-xs text-gray-500">{p.sets} sets</div>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            </div>
+
+            <div className="glass rounded-xl p-4">
+                <h3 className="font-bold mb-3">Sample Meta Teams</h3>
+                <div className="space-y-3">
+                    {meta.meta_teams.map((team, i) => (
+                        <div key={i} className="flex items-center gap-1 bg-dark-700 rounded-lg p-2">
+                            <span className="text-xs text-gray-500 w-8">#{i+1}</span>
+                            {team.pokemon.map((sp, j) => (
+                                <div key={j} className="flex flex-col items-center">
+                                    <PokemonSprite species={sp} size={40} />
+                                    <span className="text-[9px] text-gray-500 truncate w-12 text-center">{sp}</span>
+                                </div>
+                            ))}
+                        </div>
+                    ))}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function GeneratedTeams({ teams, onSelect }) {
+    if (!teams || teams.length === 0) return null;
+
+    return (
+        <div className="glass rounded-xl p-4">
+            <h3 className="font-bold mb-3">Generated Teams</h3>
+            <div className="space-y-3">
+                {teams.map((team, i) => (
+                    <div key={i} onClick={() => onSelect(team.pokemon)}
+                         className="bg-dark-700 hover:bg-dark-600 rounded-lg p-3 cursor-pointer transition-colors">
+                        <div className="flex items-center justify-between mb-2">
+                            <span className="font-semibold text-sm">Team #{i+1}</span>
+                            <span className={`text-sm font-bold ${team.predicted_winrate >= 55 ? 'text-green-400' : team.predicted_winrate >= 45 ? 'text-yellow-400' : 'text-red-400'}`}>
+                                {team.predicted_winrate}% WR
+                            </span>
+                        </div>
+                        <div className="flex gap-1">
+                            {team.pokemon.map((p, j) => (
+                                <div key={j} className="flex flex-col items-center">
+                                    <PokemonSprite species={p.species} size={40} />
+                                    <span className="text-[9px] text-gray-500 truncate w-12 text-center">{p.species}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
+
+function App() {
+    const [page, setPage] = useState('builder');
+    const [format, setFormat] = useState('gen9ou');
+    const [formats, setFormats] = useState([]);
+    const [team, setTeam] = useState([null, null, null, null, null, null]);
+    const [generatedTeams, setGeneratedTeams] = useState([]);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [searchResults, setSearchResults] = useState([]);
+    const [searching, setSearching] = useState(false);
+
+    useEffect(() => {
+        fetch(`${API}/formats`).then(r => r.json()).then(d => setFormats(d.formats || [])).catch(() => {});
+    }, []);
+
+    const searchTimeout = useRef(null);
+    function handleSearch(q) {
+        setSearchQuery(q);
+        clearTimeout(searchTimeout.current);
+        if (q.length < 2) { setSearchResults([]); return; }
+        searchTimeout.current = setTimeout(async () => {
+            setSearching(true);
+            try {
+                const res = await fetch(`${API}/pokemon/search?q=${encodeURIComponent(q)}`);
+                const data = await res.json();
+                setSearchResults(data.results || []);
+            } catch (e) { console.error(e); }
+            setSearching(false);
+        }, 300);
+    }
+
+    function addToTeam(pokemon) {
+        setTeam(prev => {
+            const next = [...prev];
+            const emptyIdx = next.findIndex(s => s === null);
+            if (emptyIdx >= 0) next[emptyIdx] = pokemon;
+            return next;
+        });
+    }
+
+    function removeFromTeam(idx) {
+        setTeam(prev => { const next = [...prev]; next[idx] = null; return next; });
+    }
+
+    function selectGeneratedTeam(pokemon) {
+        const newTeam = [...pokemon.slice(0, 6)];
+        while (newTeam.length < 6) newTeam.push(null);
+        setTeam(newTeam);
+    }
+
+    function handleImport(importedTeam) {
+        const newTeam = importedTeam.slice(0, 6);
+        while (newTeam.length < 6) newTeam.push(null);
+        setTeam(newTeam);
+    }
+
+    const filledTeam = team.filter(Boolean);
+
+    return (
+        <div className="min-h-screen">
+            {/* Header */}
+            <header className="glass sticky top-0 z-50">
+                <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 bg-accent rounded-full flex items-center justify-center">
+                            <span className="text-white font-bold text-sm">F</span>
+                        </div>
+                        <h1 className="pixel-font text-sm text-white">FutureSight<span className="text-accent">ML</span></h1>
+                    </div>
+                    <nav className="flex items-center gap-4">
+                        <button onClick={() => setPage('builder')}
+                                className={`text-sm font-semibold px-3 py-1 rounded ${page === 'builder' ? 'bg-accent text-white' : 'text-gray-400 hover:text-white'}`}>
+                            Team Builder
+                        </button>
+                        <button onClick={() => setPage('meta')}
+                                className={`text-sm font-semibold px-3 py-1 rounded ${page === 'meta' ? 'bg-accent text-white' : 'text-gray-400 hover:text-white'}`}>
+                            Meta Analysis
+                        </button>
+                        <select value={format} onChange={e => setFormat(e.target.value)}
+                                className="bg-dark-700 text-sm rounded px-2 py-1 text-gray-200">
+                            {formats.map(f => (
+                                <option key={f.id} value={f.id}>{f.id} {f.has_model ? '' : '(no model)'}</option>
+                            ))}
+                        </select>
+                    </nav>
+                </div>
+            </header>
+
+            <main className="max-w-7xl mx-auto px-4 py-6">
+                {page === 'builder' && (
+                    <div className="grid grid-cols-12 gap-4">
+                        {/* Left: Team Slots */}
+                        <div className="col-span-12 lg:col-span-3 space-y-3">
+                            <h2 className="font-bold text-lg mb-2">Your Team ({filledTeam.length}/6)</h2>
+                            <div className="space-y-2">
+                                {team.map((p, i) => <TeamSlot key={i} pokemon={p} index={i} onRemove={removeFromTeam} />)}
+                            </div>
+                            {filledTeam.length > 0 && <EvaluationPanel team={filledTeam} format={format} />}
+                            {filledTeam.length > 0 && <AnalysisPanel team={filledTeam} format={format} />}
+                            <ImportExportPanel team={filledTeam} format={format} onImport={handleImport} />
+                        </div>
+
+                        {/* Center: Search & Generate */}
+                        <div className="col-span-12 lg:col-span-6 space-y-4">
+                            <GeneratePanel format={format} onTeamGenerated={setGeneratedTeams} />
+                            <GeneratedTeams teams={generatedTeams} onSelect={selectGeneratedTeam} />
+
+                            {/* Pokemon Search */}
+                            <div className="glass rounded-xl p-4">
+                                <h3 className="font-bold mb-3">Search Pokemon</h3>
+                                <input type="text" value={searchQuery} onChange={e => handleSearch(e.target.value)}
+                                       placeholder="Search by name..."
+                                       className="w-full bg-dark-700 rounded-lg px-3 py-2 text-sm mb-3" />
+                                {searching && <div className="text-center py-4"><div className="pokeball-spinner mx-auto" /></div>}
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                    {searchResults.map(p => (
+                                        <PokemonCard key={p.id} pokemon={p} onClick={() => addToTeam(p)} compact />
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Right: Pool / Info */}
+                        <div className="col-span-12 lg:col-span-3 space-y-4">
+                            <div className="glass rounded-xl p-4">
+                                <h3 className="font-bold mb-2">Format Info</h3>
+                                <div className="text-sm text-gray-400 space-y-1">
+                                    <div>Format: <span className="text-white">{format}</span></div>
+                                    {formats.find(f => f.id === format) && (
+                                        <>
+                                            <div>Model: <span className={formats.find(f => f.id === format).has_model ? 'text-green-400' : 'text-red-400'}>
+                                                {formats.find(f => f.id === format).has_model ? 'Loaded' : 'Not available'}
+                                            </span></div>
+                                            <div>Meta teams: <span className="text-white">{formats.find(f => f.id === format).meta_teams}</span></div>
+                                            <div>Pool size: <span className="text-white">{formats.find(f => f.id === format).pool_size}</span></div>
+                                        </>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {page === 'meta' && <MetaPage format={format} />}
+            </main>
+        </div>
+    );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+</html>

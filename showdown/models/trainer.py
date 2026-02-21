@@ -201,11 +201,12 @@ class Trainer:
         keys = [
             "team1_species", "team1_moves", "team1_items", "team1_abilities",
             "team2_species", "team2_moves", "team2_items", "team2_abilities",
+            "rating_features",
             "label",
         ]
         for key in keys:
             arr = data[key]
-            if key == "label":
+            if key in ("label", "rating_features"):
                 tensors.append(torch.tensor(arr, dtype=torch.float32))
             else:
                 tensors.append(torch.tensor(arr, dtype=torch.long))
@@ -217,6 +218,7 @@ class Trainer:
         (
             t1_species, t1_moves, t1_items, t1_abilities,
             t2_species, t2_moves, t2_items, t2_abilities,
+            rating_features,
             labels,
         ) = [t.to(self.device) for t in batch]
 
@@ -229,6 +231,7 @@ class Trainer:
             "team2_moves": t2_moves,
             "team2_items": t2_items,
             "team2_abilities": t2_abilities,
+            "rating_features": rating_features,
         }
         return inputs, labels
 

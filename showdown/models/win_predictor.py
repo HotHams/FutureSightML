@@ -57,9 +57,9 @@ class WinPredictor(nn.Module):
             dropout=dropout,
         )
 
-        # Matchup head: takes both team representations + their interaction
+        # Matchup head: takes both team representations + their interaction + rating features
         self.matchup_head = nn.Sequential(
-            nn.Linear(team_dim * 3, team_dim),
+            nn.Linear(team_dim * 3 + 2, team_dim),  # +2 for rating_diff, rating_avg
             nn.LayerNorm(team_dim),
             nn.GELU(),
             nn.Dropout(dropout),
@@ -80,6 +80,7 @@ class WinPredictor(nn.Module):
         team2_moves: torch.Tensor,          # (B, 6, 4)
         team2_items: torch.Tensor,          # (B, 6)
         team2_abilities: torch.Tensor,      # (B, 6)
+        rating_features: torch.Tensor | None = None,  # (B, 2)
     ) -> torch.Tensor:
         """Predict win probability for team 1.
 
@@ -97,9 +98,18 @@ class WinPredictor(nn.Module):
         t1_repr = self.team_encoder(t1_pokemon, mask=t1_mask)  # (B, team_dim)
         t2_repr = self.team_encoder(t2_pokemon, mask=t2_mask)  # (B, team_dim)
 
-        # Matchup features: [team1, team2, team1 - team2]
+        # Matchup features: [team1, team2, team1 - team2, rating_features]
         diff = t1_repr - t2_repr
-        combined = torch.cat([t1_repr, t2_repr, diff], dim=-1)  # (B, team_dim * 3)
+        parts = [t1_repr, t2_repr, diff]
+
+        if rating_features is not None:
+            parts.append(rating_features)
+        else:
+            # Default: assume equal ratings during team building inference
+            batch_size = t1_repr.size(0)
+            parts.append(torch.zeros(batch_size, 2, device=t1_repr.device))
+
+        combined = torch.cat(parts, dim=-1)  # (B, team_dim * 3 + 2)
 
         logits = self.matchup_head(combined).squeeze(-1)  # (B,)
         return torch.sigmoid(logits)
