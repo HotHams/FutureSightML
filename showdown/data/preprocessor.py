@@ -39,75 +39,106 @@ class DataPreprocessor:
         If augment=True, each battle is added twice (swapping teams + flipping label)
         to ensure the model learns symmetrically.
 
+        IMPORTANT: Split battles FIRST, then augment each split independently
+        to prevent data leakage (a battle and its mirror in different splits).
+
         Returns dict with 'train', 'val', 'test' keys, each a list of sample dicts.
         """
-        samples = []
-        for battle in battles:
-            sample = self.fe.battle_to_tensors(battle)
-            samples.append(sample)
-
-            if augment:
-                # Swap teams and flip label
-                swapped = {
-                    "team1_species": sample["team2_species"],
-                    "team1_moves": sample["team2_moves"],
-                    "team1_items": sample["team2_items"],
-                    "team1_abilities": sample["team2_abilities"],
-                    "team2_species": sample["team1_species"],
-                    "team2_moves": sample["team1_moves"],
-                    "team2_items": sample["team1_items"],
-                    "team2_abilities": sample["team1_abilities"],
-                    "label": 1.0 - sample["label"],
-                }
-                samples.append(swapped)
-
+        # Split battles before augmentation to prevent leakage
         random.seed(self.seed)
-        random.shuffle(samples)
+        shuffled = list(battles)
+        random.shuffle(shuffled)
+        n = len(shuffled)
+        train_end = int(n * self.train_split)
+        val_end = int(n * (self.train_split + self.val_split))
+        battle_splits = {
+            "train": shuffled[:train_end],
+            "val": shuffled[train_end:val_end],
+            "test": shuffled[val_end:],
+        }
 
-        return self._split(samples)
+        result = {}
+        for split_name, split_battles in battle_splits.items():
+            samples = []
+            for battle in split_battles:
+                sample = self.fe.battle_to_tensors(battle)
+                samples.append(sample)
+
+                if augment:
+                    # Swap rating_features: negate rating_diff, keep rating_avg
+                    rf = sample["rating_features"]
+                    swapped_rf = np.array([-rf[0], rf[1]], dtype=np.float32)
+                    swapped = {
+                        "team1_species": sample["team2_species"],
+                        "team1_moves": sample["team2_moves"],
+                        "team1_items": sample["team2_items"],
+                        "team1_abilities": sample["team2_abilities"],
+                        "team2_species": sample["team1_species"],
+                        "team2_moves": sample["team1_moves"],
+                        "team2_items": sample["team1_items"],
+                        "team2_abilities": sample["team1_abilities"],
+                        "rating_features": swapped_rf,
+                        "label": 1.0 - sample["label"],
+                    }
+                    samples.append(swapped)
+
+            random.shuffle(samples)
+            result[split_name] = samples
+
+        return result
 
     def prepare_xgboost_dataset(
         self, battles: list[dict], augment: bool = True
     ) -> dict[str, tuple[np.ndarray, np.ndarray]]:
         """Prepare feature matrix + labels for XGBoost.
 
+        IMPORTANT: Split battles FIRST, then augment each split independently
+        to prevent data leakage.
+
         Returns dict with 'train', 'val', 'test' keys, each a tuple of (X, y).
         """
-        X_list = []
-        y_list = []
-
-        for battle in battles:
-            feat, label = self.fe.battle_to_engineered(battle)
-            X_list.append(feat)
-            y_list.append(label)
-
-            if augment:
-                # Swap perspective: negate difference features, flip label
-                feat_swapped, label_swapped = self.fe.battle_to_engineered({
-                    "team1": battle["team2"],
-                    "team2": battle["team1"],
-                    "winner": 2 if battle["winner"] == 1 else 1,
-                })
-                X_list.append(feat_swapped)
-                y_list.append(label_swapped)
-
-        X = np.array(X_list, dtype=np.float32)
-        y = np.array(y_list, dtype=np.float32)
-
-        # Shuffle
+        # Split battles before augmentation to prevent leakage
         rng = np.random.default_rng(self.seed)
-        indices = rng.permutation(len(X))
-        X, y = X[indices], y[indices]
-
-        n = len(X)
+        indices = rng.permutation(len(battles))
+        shuffled = [battles[i] for i in indices]
+        n = len(shuffled)
         train_end = int(n * self.train_split)
         val_end = int(n * (self.train_split + self.val_split))
-
-        return {
-            "train": (X[:train_end], y[:train_end]),
-            "val": (X[train_end:val_end], y[train_end:val_end]),
-            "test": (X[val_end:], y[val_end:]),
+        battle_splits = {
+            "train": shuffled[:train_end],
+            "val": shuffled[train_end:val_end],
+            "test": shuffled[val_end:],
         }
+
+        result = {}
+        for split_name, split_battles in battle_splits.items():
+            X_list = []
+            y_list = []
+            for battle in split_battles:
+                feat, label = self.fe.battle_to_engineered(battle)
+                X_list.append(feat)
+                y_list.append(label)
+
+                if augment:
+                    feat_swapped, label_swapped = self.fe.battle_to_engineered({
+                        "team1": battle["team2"],
+                        "team2": battle["team1"],
+                        "winner": 2 if battle["winner"] == 1 else 1,
+                    })
+                    X_list.append(feat_swapped)
+                    y_list.append(label_swapped)
+
+            X = np.array(X_list, dtype=np.float32) if X_list else np.empty((0, 0), dtype=np.float32)
+            y = np.array(y_list, dtype=np.float32) if y_list else np.empty(0, dtype=np.float32)
+
+            # Shuffle within split
+            if len(X) > 0:
+                perm = rng.permutation(len(X))
+                X, y = X[perm], y[perm]
+
+            result[split_name] = (X, y)
+
+        return result
 
     def _split(self, samples: list) -> dict[str, list]:
         n = len(samples)

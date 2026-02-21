@@ -148,11 +148,17 @@ class FeatureExtractor:
     def battle_to_tensors(self, battle: dict) -> dict[str, Any]:
         """Convert a full battle record into tensor-ready data.
 
-        Returns dict with team1_*, team2_* index arrays and the label.
+        Returns dict with team1_*, team2_* index arrays, rating info, and label.
         """
         t1 = self.team_to_indices(battle["team1"])
         t2 = self.team_to_indices(battle["team2"])
         label = 1.0 if battle["winner"] == 1 else 0.0
+
+        # Rating features (normalized)
+        r1 = battle.get("rating1") or 1500
+        r2 = battle.get("rating2") or 1500
+        rating_diff = (r1 - r2) / 400.0  # normalize: 400 ELO diff ~= 1.0
+        rating_avg = ((r1 + r2) / 2 - 1500) / 400.0
 
         return {
             "team1_species": t1["species"],
@@ -163,6 +169,7 @@ class FeatureExtractor:
             "team2_moves": t2["moves"],
             "team2_items": t2["items"],
             "team2_abilities": t2["abilities"],
+            "rating_features": np.array([rating_diff, rating_avg], dtype=np.float32),
             "label": label,
         }
 

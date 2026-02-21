@@ -74,7 +74,7 @@ class TestWinPredictor:
             team_dim=128,
         )
 
-    def test_forward(self):
+    def _make_inputs(self):
         t1_sp = torch.randint(1, NUM_SPECIES, (BATCH, TEAM_SIZE))
         t1_mv = torch.randint(1, NUM_MOVES, (BATCH, TEAM_SIZE, 4))
         t1_it = torch.randint(1, NUM_ITEMS, (BATCH, TEAM_SIZE))
@@ -83,23 +83,26 @@ class TestWinPredictor:
         t2_mv = torch.randint(1, NUM_MOVES, (BATCH, TEAM_SIZE, 4))
         t2_it = torch.randint(1, NUM_ITEMS, (BATCH, TEAM_SIZE))
         t2_ab = torch.randint(1, NUM_ABILITIES, (BATCH, TEAM_SIZE))
+        return t1_sp, t1_mv, t1_it, t1_ab, t2_sp, t2_mv, t2_it, t2_ab
 
-        out = self.model(t1_sp, t1_mv, t1_it, t1_ab, t2_sp, t2_mv, t2_it, t2_ab)
+    def test_forward(self):
+        inputs = self._make_inputs()
+        out = self.model(*inputs)
+        assert out.shape == (BATCH,)
+        assert (out >= 0).all() and (out <= 1).all()
+
+    def test_forward_with_rating_features(self):
+        inputs = self._make_inputs()
+        rating_features = torch.randn(BATCH, 2)
+        out = self.model(*inputs, rating_features=rating_features)
         assert out.shape == (BATCH,)
         assert (out >= 0).all() and (out <= 1).all()
 
     def test_gradient_flows(self):
         """Ensure gradients flow through the entire model."""
-        t1_sp = torch.randint(1, NUM_SPECIES, (BATCH, TEAM_SIZE))
-        t1_mv = torch.randint(1, NUM_MOVES, (BATCH, TEAM_SIZE, 4))
-        t1_it = torch.randint(1, NUM_ITEMS, (BATCH, TEAM_SIZE))
-        t1_ab = torch.randint(1, NUM_ABILITIES, (BATCH, TEAM_SIZE))
-        t2_sp = torch.randint(1, NUM_SPECIES, (BATCH, TEAM_SIZE))
-        t2_mv = torch.randint(1, NUM_MOVES, (BATCH, TEAM_SIZE, 4))
-        t2_it = torch.randint(1, NUM_ITEMS, (BATCH, TEAM_SIZE))
-        t2_ab = torch.randint(1, NUM_ABILITIES, (BATCH, TEAM_SIZE))
-
-        out = self.model(t1_sp, t1_mv, t1_it, t1_ab, t2_sp, t2_mv, t2_it, t2_ab)
+        inputs = self._make_inputs()
+        rating_features = torch.randn(BATCH, 2)
+        out = self.model(*inputs, rating_features=rating_features)
         loss = out.sum()
         loss.backward()
 

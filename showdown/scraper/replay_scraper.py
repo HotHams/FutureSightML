@@ -55,6 +55,9 @@ class ReplayScraper:
     ) -> dict[str, int]:
         """Scrape all available replays for a given format.
 
+        Uses timestamp-based deep pagination: once page-based pagination exhausts,
+        uses the 'before' parameter to go further back in time.
+
         Returns statistics dict with counts of fetched/parsed/skipped/errors.
         """
         self._stats = {"fetched": 0, "parsed": 0, "skipped": 0, "errors": 0}
@@ -62,16 +65,31 @@ class ReplayScraper:
 
         page = 1
         consecutive_empty = 0
+        before_ts = None  # For deep pagination
+        total_pages = 0
 
-        while page <= max_pages and consecutive_empty < 3:
-            replay_ids = await self._fetch_replay_list(format_id, page)
+        while total_pages < max_pages and consecutive_empty < 5:
+            replay_entries = await self._fetch_replay_list(format_id, page, before=before_ts)
 
-            if not replay_ids:
+            if not replay_entries:
+                if before_ts is None:
+                    # Try switching to timestamp-based pagination
+                    break
                 consecutive_empty += 1
                 page += 1
+                total_pages += 1
                 continue
 
             consecutive_empty = 0
+
+            replay_ids = [r["id"] for r in replay_entries]
+
+            # Track oldest replay for deep pagination
+            oldest_ts = None
+            for entry in replay_entries:
+                ts = entry.get("uploadtime")
+                if ts and (oldest_ts is None or ts < oldest_ts):
+                    oldest_ts = ts
 
             # Filter out already-scraped replays
             new_ids = []
@@ -87,22 +105,38 @@ class ReplayScraper:
                 await self.db.commit()
 
             if progress_callback:
-                progress_callback(page, self._stats.copy())
+                progress_callback(total_pages + 1, self._stats.copy())
 
             log.info(
                 "Page %d: %d replays (%d new) | Total: %d parsed, %d skipped, %d errors",
-                page, len(replay_ids), len(new_ids),
+                total_pages + 1, len(replay_ids), len(new_ids),
                 self._stats["parsed"], self._stats["skipped"], self._stats["errors"],
             )
+
             page += 1
+            total_pages += 1
+
+            # When page-based pagination exhausts (after ~100 pages), switch to
+            # timestamp-based deep pagination to go further back in time
+            if page > 100 and oldest_ts and before_ts != oldest_ts:
+                before_ts = oldest_ts
+                page = 1  # Reset page counter for new time window
+                log.info("Deep pagination: going back before timestamp %d", before_ts)
 
         log.info("Scrape complete for %s: %s", format_id, self._stats)
         return self._stats
 
-    async def _fetch_replay_list(self, format_id: str, page: int) -> list[str]:
-        """Fetch a page of replay IDs for a format."""
+    async def _fetch_replay_list(
+        self, format_id: str, page: int, before: int | None = None
+    ) -> list[dict]:
+        """Fetch a page of replay entries for a format.
+
+        Returns list of dicts with 'id' and 'uploadtime' keys.
+        """
         url = f"{self.base_url}/search.json"
-        params = {"format": format_id, "page": page}
+        params: dict[str, Any] = {"format": format_id, "page": page}
+        if before is not None:
+            params["before"] = before
 
         try:
             session = await self._get_session()
@@ -120,7 +154,7 @@ class ReplayScraper:
         if not isinstance(data, list):
             return []
 
-        return [r["id"] for r in data if isinstance(r, dict) and "id" in r]
+        return [r for r in data if isinstance(r, dict) and "id" in r]
 
     async def _process_replay(self, replay_id: str, format_id: str) -> None:
         """Fetch, parse, and store a single replay."""
