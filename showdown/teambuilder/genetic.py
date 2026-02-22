@@ -31,8 +31,8 @@ class GeneticTeamBuilder:
         evaluator: TeamEvaluator,
         constraints: FormatConstraints,
         pokemon_pool: list[dict],
-        population_size: int = 200,
-        generations: int = 500,
+        population_size: int = 100,
+        generations: int = 80,
         mutation_rate: float = 0.15,
         crossover_rate: float = 0.7,
         elite_size: int = 20,
@@ -105,7 +105,7 @@ class GeneticTeamBuilder:
             best_ever.sort(key=lambda x: x["fitness"], reverse=True)
             best_ever = best_ever[:n_results * 3]
 
-            if gen % 25 == 0 or gen == 1:
+            if gen % 10 == 0 or gen == 1:
                 log.info(
                     "Gen %d/%d | best=%.4f | avg=%.4f | pool=%d",
                     gen, self.generations, best_fitness, avg_fitness, len(best_ever),
@@ -114,10 +114,10 @@ class GeneticTeamBuilder:
             if progress_callback:
                 progress_callback(gen, best_fitness, avg_fitness)
 
-            # Check convergence — require longer runs for more diversity
-            if gen > 100 and best_fitness > 0.5:
+            # Check convergence (top 10 teams within 0.5% of each other)
+            if gen > 15 and best_fitness > 0.5:
                 top_10_fitness = [f for _, f in fitness_scores[:10]]
-                if max(top_10_fitness) - min(top_10_fitness) < 0.0005:
+                if max(top_10_fitness) - min(top_10_fitness) < 0.005:
                     log.info("Converged at generation %d", gen)
                     break
 

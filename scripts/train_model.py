@@ -24,6 +24,7 @@ from showdown.data.features import FeatureExtractor
 from showdown.data.preprocessor import DataPreprocessor
 from showdown.models.win_predictor import WinPredictor
 from showdown.models.xgb_predictor import XGBPredictor
+from showdown.models.ensemble import EnsemblePredictor
 from showdown.models.trainer import Trainer
 from showdown.utils.logging_config import setup_logging
 
@@ -40,6 +41,8 @@ async def main():
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--device", type=str, default=None, help="cuda or cpu")
+    parser.add_argument("--max-age-days", type=int, default=None,
+                        help="Only use replays from the last N days")
     parser.add_argument("--config", type=str, default=None)
     args = parser.parse_args()
 
@@ -50,6 +53,7 @@ async def main():
     xgb_cfg = cfg.get("xgboost", {})
 
     min_rating = args.min_rating or train_cfg.get("min_rating_filter", 1500)
+    max_age_days = args.max_age_days or train_cfg.get("max_replay_age_days", None)
     epochs = args.epochs or train_cfg.get("epochs", 100)
     batch_size = args.batch_size or train_cfg.get("batch_size", 256)
     lr = args.lr or train_cfg.get("learning_rate", 0.001)
@@ -60,9 +64,10 @@ async def main():
     db = Database(db_path)
     await db.connect()
 
-    log.info("Loading battle data for %s (min_rating=%d)...", args.format, min_rating)
+    age_msg = f", max_age={max_age_days}d" if max_age_days else ""
+    log.info("Loading battle data for %s (min_rating=%d%s)...", args.format, min_rating, age_msg)
     battles = await db.get_training_battles(
-        args.format, min_rating=min_rating, limit=args.limit
+        args.format, min_rating=min_rating, limit=args.limit, max_age_days=max_age_days
     )
     log.info("Loaded %d battles", len(battles))
 
@@ -129,7 +134,9 @@ async def main():
             pokemon_dim=model_cfg.get("pokemon_hidden_dim", 128),
             team_dim=model_cfg.get("team_hidden_dim", 256),
             attention_heads=model_cfg.get("attention_heads", 4),
-            dropout=model_cfg.get("dropout", 0.2),
+            dropout=model_cfg.get("dropout", 0.25),
+            continuous_dim=model_cfg.get("continuous_dim", 64),
+            rating_dim=model_cfg.get("rating_dim", 6),
         )
 
         neural_metrics = trainer.train_neural(
@@ -158,9 +165,9 @@ async def main():
         log.info("=" * 60)
 
         xgb_data = preprocessor.prepare_xgboost_dataset(battles, augment=True)
-        X_train, y_train = xgb_data["train"]
-        X_val, y_val = xgb_data["val"]
-        X_test, y_test = xgb_data["test"]
+        X_train, y_train, w_train = xgb_data["train"]
+        X_val, y_val, w_val = xgb_data["val"]
+        X_test, y_test, w_test = xgb_data["test"]
 
         log.info(
             "XGBoost dataset: train=%d, val=%d, test=%d, features=%d",
@@ -187,6 +194,7 @@ async def main():
             X_val=X_val, y_val=y_val,
             format_id=args.format,
             db=db,
+            sample_weight=w_train,
         )
 
         # Test set evaluation
@@ -197,6 +205,33 @@ async def main():
         # Feature importance
         top_features = xgb_model.feature_importance(top_n=20)
         log.info("Top 20 feature importances: %s", top_features)
+
+    # ---- Ensemble calibration ----
+    if args.model == "both":
+        log.info("=" * 60)
+        log.info("CALIBRATING ENSEMBLE WEIGHTS")
+        log.info("=" * 60)
+
+        # Reconstruct the val split (same seed=42 as preprocessor)
+        rng = np.random.RandomState(42)
+        indices = rng.permutation(len(battles))
+        shuffled = [battles[i] for i in indices]
+        n = len(shuffled)
+        train_end = int(n * train_cfg.get("train_split", 0.8))
+        val_end = int(n * (train_cfg.get("train_split", 0.8) + train_cfg.get("val_split", 0.1)))
+        val_battles = shuffled[train_end:val_end]
+        val_labels = [1.0 if b["winner"] == 1 else 0.0 for b in val_battles]
+
+        ensemble = EnsemblePredictor(
+            neural_model=model,
+            xgb_model=xgb_model,
+            feature_extractor=fe,
+            device=str(trainer.device),
+        )
+        neural_w, xgb_w = ensemble.calibrate_weights(val_battles, val_labels)
+        weights_path = Path(checkpoint_dir) / f"ensemble_{args.format}_weights.json"
+        ensemble.save_weights(weights_path)
+        log.info("Ensemble weights for %s: neural=%.2f, xgb=%.2f", args.format, neural_w, xgb_w)
 
     await db.close()
     log.info("Training complete!")

@@ -31,6 +31,18 @@ class DataPreprocessor:
         self.test_split = test_split
         self.seed = seed
 
+    @staticmethod
+    def _compute_sample_weight(battle: dict) -> float:
+        """Compute sample weight based on rating quality.
+
+        Higher-rated games get more weight since team composition
+        matters more at higher Elo.
+        """
+        r1 = battle.get("rating1") or 0
+        if r1 <= 0:
+            return 1.0
+        return 1.0 + max(0, (r1 - 1500)) / 500.0
+
     def prepare_neural_dataset(
         self, battles: list[dict], augment: bool = True
     ) -> dict[str, list[dict]]:
@@ -62,12 +74,14 @@ class DataPreprocessor:
             samples = []
             for battle in split_battles:
                 sample = self.fe.battle_to_tensors(battle)
+                sample["sample_weight"] = self._compute_sample_weight(battle)
                 samples.append(sample)
 
                 if augment:
-                    # Swap rating_features: negate rating_diff, keep rating_avg
+                    # Swap rating_features: negate rating_diff (idx 0), rest symmetric
                     rf = sample["rating_features"]
-                    swapped_rf = np.array([-rf[0], rf[1]], dtype=np.float32)
+                    swapped_rf = rf.copy()
+                    swapped_rf[0] = -swapped_rf[0]
                     swapped = {
                         "team1_species": sample["team2_species"],
                         "team1_moves": sample["team2_moves"],
@@ -79,7 +93,12 @@ class DataPreprocessor:
                         "team2_abilities": sample["team1_abilities"],
                         "rating_features": swapped_rf,
                         "label": 1.0 - sample["label"],
+                        "sample_weight": sample["sample_weight"],
                     }
+                    # Swap continuous features if present
+                    if "team1_continuous" in sample:
+                        swapped["team1_continuous"] = sample["team2_continuous"]
+                        swapped["team2_continuous"] = sample["team1_continuous"]
                     samples.append(swapped)
 
             random.shuffle(samples)
@@ -89,13 +108,13 @@ class DataPreprocessor:
 
     def prepare_xgboost_dataset(
         self, battles: list[dict], augment: bool = True
-    ) -> dict[str, tuple[np.ndarray, np.ndarray]]:
-        """Prepare feature matrix + labels for XGBoost.
+    ) -> dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]:
+        """Prepare feature matrix + labels + sample weights for XGBoost.
 
         IMPORTANT: Split battles FIRST, then augment each split independently
         to prevent data leakage.
 
-        Returns dict with 'train', 'val', 'test' keys, each a tuple of (X, y).
+        Returns dict with 'train', 'val', 'test' keys, each a tuple of (X, y, w).
         """
         # Split battles before augmentation to prevent leakage
         rng = np.random.default_rng(self.seed)
@@ -114,10 +133,13 @@ class DataPreprocessor:
         for split_name, split_battles in battle_splits.items():
             X_list = []
             y_list = []
+            w_list = []
             for battle in split_battles:
                 feat, label = self.fe.battle_to_engineered(battle)
+                weight = self._compute_sample_weight(battle)
                 X_list.append(feat)
                 y_list.append(label)
+                w_list.append(weight)
 
                 if augment:
                     feat_swapped, label_swapped = self.fe.battle_to_engineered({
@@ -127,16 +149,18 @@ class DataPreprocessor:
                     })
                     X_list.append(feat_swapped)
                     y_list.append(label_swapped)
+                    w_list.append(weight)  # same weight for augmented copy
 
             X = np.array(X_list, dtype=np.float32) if X_list else np.empty((0, 0), dtype=np.float32)
             y = np.array(y_list, dtype=np.float32) if y_list else np.empty(0, dtype=np.float32)
+            w = np.array(w_list, dtype=np.float32) if w_list else np.empty(0, dtype=np.float32)
 
             # Shuffle within split
             if len(X) > 0:
                 perm = rng.permutation(len(X))
-                X, y = X[perm], y[perm]
+                X, y, w = X[perm], y[perm], w[perm]
 
-            result[split_name] = (X, y)
+            result[split_name] = (X, y, w)
 
         return result
 

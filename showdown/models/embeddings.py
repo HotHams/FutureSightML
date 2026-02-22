@@ -12,6 +12,7 @@ class PokemonEncoder(nn.Module):
         - ability index (int)
         - item index (int)
         - 4 move indices (int)
+        - optional continuous features (float vector of continuous_dim)
 
     Output: dense vector of size `output_dim`.
     """
@@ -28,6 +29,7 @@ class PokemonEncoder(nn.Module):
         ability_dim: int = 32,
         output_dim: int = 128,
         dropout: float = 0.2,
+        continuous_dim: int = 64,
     ):
         super().__init__()
         self.species_embed = nn.Embedding(num_species, species_dim, padding_idx=0)
@@ -35,9 +37,20 @@ class PokemonEncoder(nn.Module):
         self.item_embed = nn.Embedding(num_items, item_dim, padding_idx=0)
         self.ability_embed = nn.Embedding(num_abilities, ability_dim, padding_idx=0)
 
-        input_dim = species_dim + 4 * move_dim + item_dim + ability_dim
+        # Projection for continuous per-Pokemon features (e.g. base stats, EVs, IVs)
+        self.continuous_proj = nn.Sequential(
+            nn.Linear(continuous_dim, 64),
+            nn.LayerNorm(64),
+            nn.GELU(),
+        )
+
+        input_dim = species_dim + 4 * move_dim + item_dim + ability_dim + 64
         self.mlp = nn.Sequential(
-            nn.Linear(input_dim, output_dim),
+            nn.Linear(input_dim, output_dim * 2),
+            nn.LayerNorm(output_dim * 2),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(output_dim * 2, output_dim),
             nn.LayerNorm(output_dim),
             nn.GELU(),
             nn.Dropout(dropout),
@@ -52,8 +65,16 @@ class PokemonEncoder(nn.Module):
         moves: torch.Tensor,       # (batch, 6, 4)
         items: torch.Tensor,       # (batch, 6)
         abilities: torch.Tensor,   # (batch, 6)
+        continuous: torch.Tensor | None = None,  # (batch, 6, continuous_dim)
     ) -> torch.Tensor:
         """Encode all 6 Pokemon on a team.
+
+        Args:
+            species: Species indices, shape (B, 6)
+            moves: Move indices, shape (B, 6, 4)
+            items: Item indices, shape (B, 6)
+            abilities: Ability indices, shape (B, 6)
+            continuous: Optional continuous features per Pokemon, shape (B, 6, continuous_dim)
 
         Returns: (batch, 6, output_dim)
         """
@@ -68,8 +89,16 @@ class PokemonEncoder(nn.Module):
         mv_emb = self.move_embed(moves)               # (B, 6, 4, mv_dim)
         mv_emb = mv_emb.view(batch_size, team_size, -1)  # (B, 6, 4*mv_dim)
 
+        # Project continuous features or use zeros
+        if continuous is not None:
+            cont_proj = self.continuous_proj(continuous)  # (B, 6, 64)
+        else:
+            cont_proj = torch.zeros(
+                batch_size, team_size, 64, device=species.device
+            )
+
         # Concatenate all embeddings per Pokemon
-        x = torch.cat([sp_emb, mv_emb, it_emb, ab_emb], dim=-1)  # (B, 6, input_dim)
+        x = torch.cat([sp_emb, mv_emb, it_emb, ab_emb, cont_proj], dim=-1)  # (B, 6, input_dim)
 
         # Apply MLP to each Pokemon independently
         x = self.mlp(x)  # (B, 6, output_dim)
@@ -88,10 +117,14 @@ class TeamEncoder(nn.Module):
         pokemon_dim: int = 128,
         team_dim: int = 256,
         num_heads: int = 4,
-        num_layers: int = 2,
+        num_layers: int = 3,
         dropout: float = 0.2,
     ):
         super().__init__()
+
+        # Positional embedding for the 6 team slots
+        self.pos_embed = nn.Embedding(6, pokemon_dim)
+
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=pokemon_dim,
             nhead=num_heads,
@@ -105,9 +138,11 @@ class TeamEncoder(nn.Module):
             encoder_layer, num_layers=num_layers,
         )
 
-        # Attention pooling: learn to weight the 6 Pokemon
+        # Deeper attention pooling: learn to weight the 6 Pokemon
         self.attn_pool = nn.Sequential(
-            nn.Linear(pokemon_dim, 1),
+            nn.Linear(pokemon_dim, pokemon_dim // 2),
+            nn.GELU(),
+            nn.Linear(pokemon_dim // 2, 1),
         )
         self.projection = nn.Sequential(
             nn.Linear(pokemon_dim, team_dim),
@@ -128,8 +163,14 @@ class TeamEncoder(nn.Module):
 
         Returns: (batch, team_dim)
         """
+        B, S, _ = pokemon_reprs.shape
+
+        # Add positional embeddings
+        positions = torch.arange(S, device=pokemon_reprs.device).unsqueeze(0).expand(B, -1)
+        x = pokemon_reprs + self.pos_embed(positions)
+
         # Self-attention over the 6 Pokemon
-        x = self.transformer(pokemon_reprs, src_key_padding_mask=mask)  # (B, 6, D)
+        x = self.transformer(x, src_key_padding_mask=mask)  # (B, 6, D)
 
         # Attention pooling
         attn_weights = self.attn_pool(x)  # (B, 6, 1)

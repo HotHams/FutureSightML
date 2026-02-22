@@ -2,6 +2,7 @@
 
 import json
 import logging
+import math
 import time
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,50 @@ from .xgb_predictor import XGBPredictor
 from ..data.database import Database
 
 log = logging.getLogger("showdown.models.trainer")
+
+
+class WarmupCosineScheduler(torch.optim.lr_scheduler._LRScheduler):
+    """Linear warmup followed by CosineAnnealingWarmRestarts.
+
+    - Warmup phase: linearly ramp from 0 to base_lr over `warmup_epochs` epochs.
+    - Cosine phase: CosineAnnealingWarmRestarts with T_0, T_mult, eta_min.
+    """
+
+    def __init__(
+        self,
+        optimizer: torch.optim.Optimizer,
+        warmup_epochs: int,
+        T_0: int,
+        T_mult: int = 2,
+        eta_min: float = 0.0,
+        last_epoch: int = -1,
+    ):
+        self.warmup_epochs = warmup_epochs
+        self.T_0 = T_0
+        self.T_mult = T_mult
+        self.eta_min = eta_min
+        super().__init__(optimizer, last_epoch)
+
+    def get_lr(self):
+        if self.last_epoch < self.warmup_epochs:
+            # Linear warmup: scale from 0 to base_lr
+            warmup_factor = (self.last_epoch + 1) / self.warmup_epochs
+            return [base_lr * warmup_factor for base_lr in self.base_lrs]
+        else:
+            # Cosine annealing with warm restarts
+            cosine_epoch = self.last_epoch - self.warmup_epochs
+            # Determine which restart cycle we're in
+            T_cur = self.T_0
+            cycle_epoch = cosine_epoch
+            while cycle_epoch >= T_cur:
+                cycle_epoch -= T_cur
+                T_cur *= self.T_mult
+            # Cosine decay within the current cycle
+            return [
+                self.eta_min + (base_lr - self.eta_min) *
+                (1 + math.cos(math.pi * cycle_epoch / T_cur)) / 2
+                for base_lr in self.base_lrs
+            ]
 
 
 class Trainer:
@@ -74,9 +119,19 @@ class Trainer:
         train_loader = self._make_dataloader(train_data, batch_size, shuffle=True)
         val_loader = self._make_dataloader(val_data, batch_size, shuffle=False)
 
-        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
-        criterion = nn.BCELoss()
+        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-3)
+
+        # Warmup + cosine annealing with warm restarts
+        warmup_epochs = 5
+        scheduler = WarmupCosineScheduler(
+            optimizer,
+            warmup_epochs=warmup_epochs,
+            T_0=10,
+            T_mult=2,
+            eta_min=lr / 50,
+        )
+        # Use reduction='none' so we can apply per-sample weights
+        criterion = nn.BCELoss(reduction='none')
 
         best_val_auc = 0.0
         best_epoch = 0
@@ -93,9 +148,44 @@ class Trainer:
 
             for batch in train_loader:
                 optimizer.zero_grad()
-                inputs, labels = self._unpack_batch(batch)
-                preds = model(**inputs)
-                loss = criterion(preds, labels)
+                inputs, labels, weights = self._unpack_batch(batch)
+
+                # Light label smoothing (reduced since Mixup also regularizes)
+                smoothed_labels = labels * 0.97 + 0.015
+
+                # Mixup augmentation: interpolate between random pairs
+                # Creates virtual training examples, reduces memorization
+                lam = np.random.beta(0.2, 0.2)
+                cur_batch_size = smoothed_labels.size(0)
+                perm = torch.randperm(cur_batch_size, device=self.device)
+
+                mixed_inputs = {}
+                for key, val in inputs.items():
+                    if val is not None and val.is_floating_point():
+                        mixed_inputs[key] = lam * val + (1 - lam) * val[perm]
+                    elif val is not None:
+                        # For integer indices: use original (can't interpolate indices)
+                        # Mixup only affects continuous features and labels
+                        mixed_inputs[key] = val
+                    else:
+                        mixed_inputs[key] = val
+                mixed_labels = lam * smoothed_labels + (1 - lam) * smoothed_labels[perm]
+
+                # Mix weights too
+                if weights is not None:
+                    mixed_weights = lam * weights + (1 - lam) * weights[perm]
+                else:
+                    mixed_weights = None
+
+                preds = model(**mixed_inputs)
+                per_sample_loss = criterion(preds, mixed_labels)
+
+                # Apply sample weights if available
+                if mixed_weights is not None:
+                    loss = (per_sample_loss * mixed_weights).mean()
+                else:
+                    loss = per_sample_loss.mean()
+
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 optimizer.step()
@@ -103,8 +193,9 @@ class Trainer:
 
             scheduler.step()
 
-            # Validation
-            val_metrics = self._evaluate_neural(model, val_loader, criterion)
+            # Validation (use hard labels for proper metric evaluation)
+            val_criterion = nn.BCELoss()  # standard mean reduction for eval
+            val_metrics = self._evaluate_neural(model, val_loader, val_criterion)
             train_loss = np.mean(train_losses)
 
             history["train_loss"].append(train_loss)
@@ -119,14 +210,16 @@ class Trainer:
                     val_metrics["loss"], val_metrics["auc"], val_metrics["accuracy"],
                 )
 
-            # Checkpointing
+            # Always save best checkpoint
             if val_metrics["auc"] > best_val_auc:
                 best_val_auc = val_metrics["auc"]
                 best_epoch = epoch
                 epochs_without_improvement = 0
                 self._save_neural_checkpoint(model, format_id, epoch, val_metrics)
             else:
-                epochs_without_improvement += 1
+                # Only count toward patience AFTER warmup phase
+                if epoch > warmup_epochs:
+                    epochs_without_improvement += 1
 
             if epochs_without_improvement >= patience:
                 log.info("Early stopping at epoch %d (best epoch: %d)", epoch, best_epoch)
@@ -165,7 +258,7 @@ class Trainer:
 
         with torch.no_grad():
             for batch in loader:
-                inputs, labels = self._unpack_batch(batch)
+                inputs, labels, _ = self._unpack_batch(batch)
                 preds = model(**inputs)
                 loss = criterion(preds, labels)
                 total_loss += loss.item()
@@ -204,6 +297,11 @@ class Trainer:
             "rating_features",
             "label",
         ]
+
+        # Check if continuous features and sample weights are available
+        has_continuous = "team1_continuous" in data and "team2_continuous" in data
+        has_weights = "sample_weight" in data
+
         for key in keys:
             arr = data[key]
             if key in ("label", "rating_features"):
@@ -211,16 +309,51 @@ class Trainer:
             else:
                 tensors.append(torch.tensor(arr, dtype=torch.long))
 
+        # Add continuous feature tensors if available
+        if has_continuous:
+            tensors.append(torch.tensor(data["team1_continuous"], dtype=torch.float32))
+            tensors.append(torch.tensor(data["team2_continuous"], dtype=torch.float32))
+
+        # Add sample weight tensor if available
+        if has_weights:
+            tensors.append(torch.tensor(data["sample_weight"], dtype=torch.float32))
+
         dataset = TensorDataset(*tensors)
         return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=0)
 
-    def _unpack_batch(self, batch: tuple) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
-        (
-            t1_species, t1_moves, t1_items, t1_abilities,
-            t2_species, t2_moves, t2_items, t2_abilities,
-            rating_features,
-            labels,
-        ) = [t.to(self.device) for t in batch]
+    def _unpack_batch(self, batch: tuple) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor | None]:
+        # Tensor count determines which optional features are present
+        # Base: 10 (4 team1 + 4 team2 + rating + label)
+        # +continuous: +2 (team1_continuous, team2_continuous)
+        # +weights: +1 (sample_weight)
+        n = len(batch)
+        has_continuous = n in (12, 13)
+        has_weights = n in (11, 13)
+
+        idx = 0
+        moved = [t.to(self.device) for t in batch]
+
+        t1_species = moved[0]
+        t1_moves = moved[1]
+        t1_items = moved[2]
+        t1_abilities = moved[3]
+        t2_species = moved[4]
+        t2_moves = moved[5]
+        t2_items = moved[6]
+        t2_abilities = moved[7]
+        rating_features = moved[8]
+        labels = moved[9]
+        idx = 10
+
+        if has_continuous:
+            t1_continuous = moved[idx]
+            t2_continuous = moved[idx + 1]
+            idx += 2
+        else:
+            t1_continuous = None
+            t2_continuous = None
+
+        weights = moved[idx] if has_weights else None
 
         inputs = {
             "team1_species": t1_species,
@@ -232,8 +365,10 @@ class Trainer:
             "team2_items": t2_items,
             "team2_abilities": t2_abilities,
             "rating_features": rating_features,
+            "team1_continuous": t1_continuous,
+            "team2_continuous": t2_continuous,
         }
-        return inputs, labels
+        return inputs, labels, weights
 
     # ------------------------------------------------------------------
     # XGBoost training
@@ -248,6 +383,7 @@ class Trainer:
         y_val: np.ndarray,
         format_id: str,
         db: Database | None = None,
+        sample_weight: np.ndarray | None = None,
     ) -> dict[str, Any]:
         """Train the XGBoost model and save checkpoint."""
         log.info(
@@ -256,7 +392,7 @@ class Trainer:
         )
 
         start_time = time.time()
-        metrics = xgb_model.train(X_train, y_train, X_val, y_val)
+        metrics = xgb_model.train(X_train, y_train, X_val, y_val, sample_weight=sample_weight)
         elapsed = time.time() - start_time
 
         # Save
@@ -282,7 +418,20 @@ class Trainer:
             return None
 
         state = torch.load(path, map_location=self.device, weights_only=True)
-        model.load_state_dict(state["model_state_dict"])
+        # Validate checkpoint dimension compatibility
+        saved_state = state["model_state_dict"]
+        cont_key = "pokemon_encoder.continuous_proj.0.weight"
+        if cont_key in saved_state:
+            saved_dim = saved_state[cont_key].shape[1]
+            expected_dim = model.pokemon_encoder.continuous_proj[0].in_features
+            if saved_dim != expected_dim:
+                log.error(
+                    "Checkpoint continuous_dim mismatch for %s: "
+                    "saved=%d, expected=%d. Retrain required.",
+                    format_id, saved_dim, expected_dim,
+                )
+                return None
+        model.load_state_dict(saved_state)
         model.to(self.device)
         log.info("Loaded neural checkpoint: epoch %d, metrics=%s", state["epoch"], state["metrics"])
         return state["metrics"]
