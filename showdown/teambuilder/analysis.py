@@ -494,6 +494,460 @@ class TeamAnalyzer:
         }
 
     # ------------------------------------------------------------------
+    # Team Strategy Explainer
+    # ------------------------------------------------------------------
+
+    def explain_strategy(self, team: list[dict]) -> dict[str, Any]:
+        """Analyze the team's intended strategy, roles, and win conditions.
+
+        Returns a structured explanation of how the team is meant to function:
+        - Each Pokemon's role and purpose
+        - Primary and secondary win conditions
+        - Defensive cores and synergies
+        - Game plan (lead, mid-game, end-game)
+        """
+        roles = []
+        win_conditions = []
+        game_plan = {"lead_candidates": [], "mid_game": [], "end_game": []}
+        synergies = []
+
+        # Classify each Pokemon
+        for pkmn in team:
+            role = self._classify_role(pkmn)
+            roles.append(role)
+
+        # Identify win conditions
+        win_conditions = self._identify_win_conditions(team, roles)
+
+        # Identify defensive cores
+        synergies = self._identify_synergies(team, roles)
+
+        # Build game plan
+        game_plan = self._build_game_plan(team, roles)
+
+        # Generate summary
+        summary = self._generate_summary(roles, win_conditions, synergies, game_plan)
+
+        return {
+            "roles": roles,
+            "win_conditions": win_conditions,
+            "synergies": synergies,
+            "game_plan": game_plan,
+            "summary": summary,
+        }
+
+    def _classify_role(self, pkmn: dict) -> dict:
+        """Determine a Pokemon's role on the team."""
+        species = pkmn.get("species", "")
+        species_id = _to_id(species)
+        stats = self._get_base_stats(species_id)
+        types = self._get_types(species_id)
+        moves = [m for m in pkmn.get("moves", []) if m]
+        move_ids = {_to_id(m) for m in moves}
+        ability = _to_id(pkmn.get("ability", "") or "")
+        item = _to_id(pkmn.get("item", "") or "")
+
+        role_tags = []
+        description_parts = []
+
+        if not stats:
+            return {"species": species, "role": "Unknown", "tags": [], "description": ""}
+
+        atk = stats.get("atk", 0)
+        spa = stats.get("spa", 0)
+        dfn = stats.get("def", 0)
+        spd = stats.get("spd", 0)
+        hp = stats.get("hp", 0)
+        spe = stats.get("spe", 0)
+        best_offense = max(atk, spa)
+        phys_bulk = hp * dfn
+        spec_bulk = hp * spd
+
+        # Move category sets
+        SETUP = {"swordsdance", "nastyplot", "dragondance", "calmmind",
+                 "bulkup", "quiverdance", "shellsmash", "agility",
+                 "bellydrum", "coil", "irondefense", "shiftgear",
+                 "victorydance", "tidyup", "curse", "growth"}
+        HAZARDS = {"stealthrock", "spikes", "toxicspikes", "stickyweb"}
+        REMOVAL = {"rapidspin", "defog", "courtchange", "tidyup"}
+        RECOVERY = {"recover", "softboiled", "roost", "slackoff", "wish",
+                    "moonlight", "morningsun", "synthesis", "shoreup",
+                    "strengthsap", "rest"}
+        PIVOTS = {"uturn", "voltswitch", "flipturn", "partingshot",
+                  "teleport", "shedtail", "batonpass"}
+        STATUS_MOVES = {"willowisp", "thunderwave", "toxic", "toxicspikes",
+                        "glare", "nuzzle", "stunspore", "yawn"}
+        SCREENS = {"lightscreen", "reflect", "auroraveil"}
+        PHAZING = {"whirlwind", "roar", "dragontail", "circlethrow", "haze"}
+        PRIORITY = {"extremespeed", "bulletpunch", "machpunch", "iceshard",
+                    "aquajet", "shadowsneak", "suckerpunch", "accelerock",
+                    "quickattack", "grassyglide", "jetpunch", "firstimpression"}
+
+        has_setup = bool(move_ids & SETUP)
+        has_hazards = bool(move_ids & HAZARDS)
+        has_removal = bool(move_ids & REMOVAL)
+        has_recovery = bool(move_ids & RECOVERY)
+        has_pivot = bool(move_ids & PIVOTS)
+        has_status = bool(move_ids & STATUS_MOVES)
+        has_screens = bool(move_ids & SCREENS)
+        has_phazing = bool(move_ids & PHAZING)
+        has_priority = bool(move_ids & PRIORITY)
+
+        # Choice items
+        is_choice = item in ("choiceband", "choicespecs", "choicescarf")
+        is_scarf = item == "choicescarf"
+        is_band = item == "choiceband"
+        is_specs = item == "choicespecs"
+
+        # Classify role
+        # Setup sweeper
+        if has_setup and best_offense >= 80:
+            if atk > spa:
+                setup_move = next((m for m in moves if _to_id(m) in SETUP), "")
+                role_tags.append("Setup Sweeper")
+                description_parts.append(f"Sets up with {setup_move} to sweep physically")
+            else:
+                setup_move = next((m for m in moves if _to_id(m) in SETUP), "")
+                role_tags.append("Setup Sweeper")
+                description_parts.append(f"Sets up with {setup_move} to sweep specially")
+
+        # Wallbreaker
+        if (is_band or is_specs) or (best_offense >= 120 and not has_setup):
+            role_tags.append("Wallbreaker")
+            if is_band:
+                description_parts.append("Choice Band wallbreaker that punishes switches")
+            elif is_specs:
+                description_parts.append("Choice Specs wallbreaker with massive special power")
+            else:
+                description_parts.append("Raw power wallbreaker that pressures defensive cores")
+
+        # Revenge killer / Scarfer
+        if is_scarf:
+            role_tags.append("Revenge Killer")
+            description_parts.append("Choice Scarf user that picks off weakened threats")
+
+        # Hazard setter
+        if has_hazards:
+            hazard_moves = [m for m in moves if _to_id(m) in HAZARDS]
+            role_tags.append("Hazard Setter")
+            description_parts.append(f"Sets {', '.join(hazard_moves)} to pressure opponents")
+
+        # Hazard removal
+        if has_removal:
+            role_tags.append("Hazard Removal")
+            removal_move = next((m for m in moves if _to_id(m) in REMOVAL), "")
+            description_parts.append(f"Keeps hazards off the field with {removal_move}")
+
+        # Defensive wall (thresholds based on base stat products: HP*Def or HP*SpD)
+        if has_recovery and (phys_bulk >= 7000 or spec_bulk >= 7000):
+            if phys_bulk > spec_bulk * 1.3:
+                role_tags.append("Physical Wall")
+                description_parts.append("Tanks physical hits and recovers HP")
+            elif spec_bulk > phys_bulk * 1.3:
+                role_tags.append("Special Wall")
+                description_parts.append("Tanks special hits and recovers HP")
+            else:
+                role_tags.append("Mixed Wall")
+                description_parts.append("Blanket check to both physical and special threats")
+
+        # Pivot
+        if has_pivot:
+            pivot_move = next((m for m in moves if _to_id(m) in PIVOTS), "")
+            role_tags.append("Pivot")
+            description_parts.append(f"Uses {pivot_move} to maintain momentum")
+
+        # Screens setter
+        if has_screens:
+            role_tags.append("Screens Setter")
+            description_parts.append("Sets Light Screen/Reflect to support sweepers")
+
+        # Status spreader
+        if has_status and (phys_bulk >= 5000 or spec_bulk >= 5000):
+            status_move = next((m for m in moves if _to_id(m) in STATUS_MOVES), "")
+            role_tags.append("Status Spreader")
+            description_parts.append(f"Cripples opponents with {status_move}")
+
+        # Phaser
+        if has_phazing:
+            role_tags.append("Phaser")
+            description_parts.append("Forces out setup sweepers and racks up hazard damage")
+
+        # Priority user
+        if has_priority and best_offense >= 100:
+            priority_move = next((m for m in moves if _to_id(m) in PRIORITY), "")
+            role_tags.append("Priority Attacker")
+            description_parts.append(f"Picks off weakened foes with {priority_move}")
+
+        # Fallback: offensive or defensive
+        if not role_tags:
+            if best_offense >= 100 or spe >= 100:
+                role_tags.append("Offensive")
+                description_parts.append("Applies offensive pressure")
+            elif phys_bulk >= 6000 or spec_bulk >= 6000:
+                role_tags.append("Defensive")
+                description_parts.append("Provides defensive utility")
+            else:
+                role_tags.append("Support")
+                description_parts.append("Provides utility and support")
+
+        # Primary role is first tag
+        primary_role = role_tags[0] if role_tags else "Unknown"
+
+        return {
+            "species": species,
+            "role": primary_role,
+            "tags": role_tags,
+            "description": ". ".join(description_parts) + "." if description_parts else "",
+            "types": types,
+        }
+
+    def _identify_win_conditions(
+        self, team: list[dict], roles: list[dict]
+    ) -> list[dict]:
+        """Identify the team's primary and secondary win conditions."""
+        win_cons = []
+        role_tags_all = set()
+        for r in roles:
+            role_tags_all.update(r.get("tags", []))
+
+        # Setup sweep
+        sweepers = [r for r in roles if "Setup Sweeper" in r.get("tags", [])]
+        if sweepers:
+            names = [s["species"] for s in sweepers]
+            win_cons.append({
+                "type": "Setup Sweep",
+                "priority": "primary" if len(sweepers) >= 2 else "secondary",
+                "pokemon": names,
+                "description": f"Set up with {' or '.join(names)} after removing checks, then sweep.",
+            })
+
+        # Wallbreaking + cleaning
+        breakers = [r for r in roles if "Wallbreaker" in r.get("tags", [])]
+        if breakers:
+            names = [b["species"] for b in breakers]
+            win_cons.append({
+                "type": "Wallbreak & Clean",
+                "priority": "primary" if not sweepers else "secondary",
+                "pokemon": names,
+                "description": f"Use {', '.join(names)} to weaken walls, then clean with faster Pokemon.",
+            })
+
+        # Hazard stacking
+        hazard_setters = [r for r in roles if "Hazard Setter" in r.get("tags", [])]
+        phasers = [r for r in roles if "Phaser" in r.get("tags", [])]
+        if hazard_setters and (phasers or len(hazard_setters) >= 2):
+            win_cons.append({
+                "type": "Hazard Stack",
+                "priority": "secondary",
+                "pokemon": [h["species"] for h in hazard_setters],
+                "description": "Stack hazards and force switches to wear down the opponent passively.",
+            })
+
+        # Defensive win (stall)
+        walls = [r for r in roles
+                 if any(t in r.get("tags", []) for t in ["Physical Wall", "Special Wall", "Mixed Wall"])]
+        status_spreaders = [r for r in roles if "Status Spreader" in r.get("tags", [])]
+        if len(walls) >= 3 or (len(walls) >= 2 and status_spreaders):
+            win_cons.append({
+                "type": "Defensive Attrition",
+                "priority": "primary" if len(walls) >= 4 else "secondary",
+                "pokemon": [w["species"] for w in walls],
+                "description": "Wear down opponents through status, hazards, and passive damage.",
+            })
+
+        # Revenge killing chain
+        scarfers = [r for r in roles if "Revenge Killer" in r.get("tags", [])]
+        priority_users = [r for r in roles if "Priority Attacker" in r.get("tags", [])]
+        if scarfers or priority_users:
+            cleaners = scarfers + priority_users
+            names = list({c["species"] for c in cleaners})
+            win_cons.append({
+                "type": "Revenge Kill & Clean",
+                "priority": "secondary",
+                "pokemon": names,
+                "description": f"{', '.join(names)} can pick off weakened threats to close games.",
+            })
+
+        # Screens offense
+        screeners = [r for r in roles if "Screens Setter" in r.get("tags", [])]
+        if screeners and sweepers:
+            win_cons.append({
+                "type": "Screens Offense",
+                "priority": "primary",
+                "pokemon": [screeners[0]["species"]] + [s["species"] for s in sweepers],
+                "description": f"Set screens with {screeners[0]['species']}, then set up safely behind them.",
+            })
+
+        if not win_cons:
+            win_cons.append({
+                "type": "General Offense",
+                "priority": "primary",
+                "pokemon": [r["species"] for r in roles],
+                "description": "Apply pressure through type coverage and team synergy.",
+            })
+
+        # Sort so primary comes first
+        win_cons.sort(key=lambda w: 0 if w["priority"] == "primary" else 1)
+        return win_cons
+
+    def _identify_synergies(
+        self, team: list[dict], roles: list[dict]
+    ) -> list[dict]:
+        """Identify defensive cores and type synergies."""
+        synergies = []
+
+        # Check for complementary type pairings
+        # Classic cores: Fire/Water/Grass, Dragon/Steel/Fairy, etc.
+        CORES = [
+            ({"Fire"}, {"Water"}, "Fire/Water core: Water covers Fire's Ground/Rock weakness, Fire covers Water's Grass weakness"),
+            ({"Water"}, {"Grass"}, "Water/Grass core: Grass covers Water's Electric weakness, Water covers Grass's Fire weakness"),
+            ({"Dragon"}, {"Steel"}, "Dragon/Steel core: Steel resists Dragon's Ice/Fairy weakness, Dragon resists Steel's Fire weakness"),
+            ({"Dragon"}, {"Fairy"}, "Dragon/Fairy core: Fairy is immune to Dragon moves, Dragon resists many of Fairy's weaknesses"),
+            ({"Ground"}, {"Flying"}, "Ground/Flying core: Flying is immune to Ground, Ground covers Rock/Electric"),
+            ({"Fire"}, {"Grass"}, "Fire/Grass core: covers each other's weaknesses well"),
+        ]
+
+        type_map = {}
+        for i, pkmn in enumerate(team):
+            sp_id = _to_id(pkmn.get("species", ""))
+            types = set(self._get_types(sp_id))
+            type_map[pkmn.get("species", "")] = types
+
+        found_cores = set()
+        for species_a, types_a in type_map.items():
+            for species_b, types_b in type_map.items():
+                if species_a >= species_b:
+                    continue
+                for core_type_a, core_type_b, reason in CORES:
+                    if (types_a & core_type_a and types_b & core_type_b) or \
+                       (types_a & core_type_b and types_b & core_type_a):
+                        core_key = tuple(sorted([species_a, species_b]))
+                        if core_key not in found_cores:
+                            found_cores.add(core_key)
+                            synergies.append({
+                                "pokemon": [species_a, species_b],
+                                "type": "Defensive Core",
+                                "description": reason,
+                            })
+
+        # VoltTurn core
+        pivot_mons = [r["species"] for r in roles if "Pivot" in r.get("tags", [])]
+        if len(pivot_mons) >= 2:
+            synergies.append({
+                "pokemon": pivot_mons[:3],
+                "type": "VoltTurn Core",
+                "description": f"{', '.join(pivot_mons[:3])} form a pivot chain to maintain momentum and generate free switches.",
+            })
+
+        # Hazard + spinblock synergy
+        hazard_mons = [r["species"] for r in roles if "Hazard Setter" in r.get("tags", [])]
+        ghost_mons = [pkmn.get("species", "") for pkmn in team
+                      if "Ghost" in set(self._get_types(_to_id(pkmn.get("species", ""))))]
+        if hazard_mons and ghost_mons:
+            blockers = [g for g in ghost_mons if g not in hazard_mons]
+            if blockers:
+                synergies.append({
+                    "pokemon": hazard_mons[:1] + blockers[:1],
+                    "type": "Hazard Control",
+                    "description": f"{blockers[0]} blocks Rapid Spin to preserve {hazard_mons[0]}'s hazards.",
+                })
+
+        return synergies
+
+    def _build_game_plan(
+        self, team: list[dict], roles: list[dict]
+    ) -> dict[str, Any]:
+        """Determine the team's game plan: lead, mid-game, end-game."""
+        leads = []
+        mid = []
+        late = []
+
+        for i, (pkmn, role) in enumerate(zip(team, roles)):
+            tags = set(role.get("tags", []))
+            species = role["species"]
+            sp_id = _to_id(species)
+            stats = self._get_base_stats(sp_id) or {}
+            spe = stats.get("spe", 0)
+            item = _to_id(pkmn.get("item", "") or "")
+
+            # Lead candidates: hazard setters, screens, fast offensive
+            if "Hazard Setter" in tags or "Screens Setter" in tags:
+                leads.append({"species": species, "reason": "Sets up entry hazards/screens early"})
+            elif spe >= 100 and ("Wallbreaker" in tags or "Offensive" in tags):
+                leads.append({"species": species, "reason": "Fast offensive lead to apply early pressure"})
+
+            # Mid-game: walls, pivots, breakers
+            if any(t in tags for t in ["Physical Wall", "Special Wall", "Mixed Wall", "Pivot"]):
+                mid.append({"species": species, "reason": "Controls pace, pivots, and absorbs hits"})
+            elif "Wallbreaker" in tags:
+                mid.append({"species": species, "reason": "Breaks down defensive cores mid-game"})
+
+            # End-game: sweepers, scarfers, priority
+            if "Setup Sweeper" in tags:
+                late.append({"species": species, "reason": "Sweeps after checks are removed"})
+            elif "Revenge Killer" in tags:
+                late.append({"species": species, "reason": "Cleans up weakened threats with Scarf speed"})
+            elif "Priority Attacker" in tags:
+                late.append({"species": species, "reason": "Picks off low-HP foes with priority"})
+
+        # If no lead identified, pick fastest or hazard mon
+        if not leads:
+            fastest = max(
+                range(len(team)),
+                key=lambda i: (self._get_base_stats(_to_id(team[i].get("species", ""))) or {}).get("spe", 0),
+            )
+            leads.append({
+                "species": team[fastest].get("species", ""),
+                "reason": "Fastest team member, applies early pressure",
+            })
+
+        return {
+            "lead": leads[:2],
+            "mid_game": mid[:3],
+            "end_game": late[:3],
+        }
+
+    def _generate_summary(
+        self,
+        roles: list[dict],
+        win_conditions: list[dict],
+        synergies: list[dict],
+        game_plan: dict,
+    ) -> str:
+        """Generate a human-readable strategy summary."""
+        parts = []
+
+        # Team composition summary
+        role_counts = {}
+        for r in roles:
+            primary = r.get("role", "Unknown")
+            role_counts[primary] = role_counts.get(primary, 0) + 1
+
+        role_str = ", ".join(f"{count} {role}{'s' if count > 1 else ''}" for role, count in role_counts.items())
+        parts.append(f"This team features {role_str}.")
+
+        # Primary win condition
+        primary_wc = next((w for w in win_conditions if w["priority"] == "primary"), None)
+        if primary_wc:
+            parts.append(f"Primary win condition: {primary_wc['description']}")
+
+        # Secondary win conditions
+        secondary_wcs = [w for w in win_conditions if w["priority"] == "secondary"]
+        if secondary_wcs:
+            parts.append(f"Backup plan: {secondary_wcs[0]['description']}")
+
+        # Game plan
+        if game_plan.get("lead"):
+            lead_names = [l["species"] for l in game_plan["lead"]]
+            parts.append(f"Lead with {' or '.join(lead_names)} to set the pace early.")
+
+        if game_plan.get("end_game"):
+            closer_names = [e["species"] for e in game_plan["end_game"]]
+            parts.append(f"Close out games with {' or '.join(closer_names)}.")
+
+        return " ".join(parts)
+
+    # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 

@@ -24,7 +24,7 @@ async def main():
     parser = argparse.ArgumentParser(description="Scrape Pokemon Showdown replays")
     parser.add_argument("--format", type=str, help="Format to scrape (e.g. gen9ou)")
     parser.add_argument("--all", action="store_true", help="Scrape all configured formats")
-    parser.add_argument("--pages", type=int, default=100, help="Max pages per format")
+    parser.add_argument("--pages", type=int, default=None, help="Max pages per format (default: from config)")
     parser.add_argument("--min-rating", type=int, default=None, help="Minimum player rating")
     parser.add_argument("--config", type=str, default=None, help="Config file path")
     args = parser.parse_args()
@@ -35,6 +35,7 @@ async def main():
     scraper_cfg = cfg.get("scraper", {})
     db_path = cfg.get("database", {}).get("path", "data/showdown.db")
     min_rating = args.min_rating or scraper_cfg.get("min_rating", 1500)
+    max_pages = args.pages or scraper_cfg.get("max_pages_per_format", 100)
 
     db = Database(db_path)
     await db.connect()
@@ -67,7 +68,7 @@ async def main():
             existing = await db.get_replay_count(fmt)
             log.info("Existing replays for %s: %d", fmt, existing)
 
-            stats = await scraper.scrape_format(fmt, max_pages=args.pages)
+            stats = await scraper.scrape_format(fmt, max_pages=max_pages)
             for k in total_stats:
                 total_stats[k] += stats.get(k, 0)
 

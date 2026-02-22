@@ -11,6 +11,8 @@ from typing import Any
 
 import aiohttp
 
+from .mechanics import build_move_sets, verify_mechanics
+
 log = logging.getLogger("showdown.data.pokemon_data")
 
 DATA_CACHE_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "raw"
@@ -142,6 +144,7 @@ class PokemonDataLoader:
         self.items: dict[str, Any] = {}
         self.abilities: dict[str, Any] = {}
         self.formats_data: dict[str, Any] = {}
+        self.move_sets: dict[str, set[str]] = {}
         self._loaded = False
 
     async def load(self, force_download: bool = False) -> None:
@@ -195,6 +198,9 @@ class PokemonDataLoader:
                     len(self.abilities), len(extracted),
                 )
                 self.abilities = extracted
+
+        # Build mechanics tables from loaded data
+        self._build_mechanics_tables()
 
         self._loaded = True
         log.info(
@@ -276,6 +282,26 @@ class PokemonDataLoader:
                 if aid and aid not in abilities:
                     abilities[aid] = {"name": ability_name}
         return abilities
+
+    def _build_mechanics_tables(self) -> None:
+        """Build move category sets and verify mechanics registries."""
+        if self.moves:
+            self.move_sets = build_move_sets(self.moves)
+            log.info(
+                "Built move sets: %s",
+                ", ".join(f"{k}={len(v)}" for k, v in sorted(self.move_sets.items())),
+            )
+        else:
+            log.warning("No moves data loaded — skipping move set construction")
+
+        results = verify_mechanics(self)
+        if results.get("missing_items") or results.get("missing_abilities"):
+            log.warning(
+                "Mechanics verification: %d items and %d abilities in registry "
+                "not found in loaded data (may be gen-specific or alternate forms)",
+                results.get("missing_items", 0),
+                results.get("missing_abilities", 0),
+            )
 
     def get_tier_pokemon(self, tier: str) -> list[str]:
         """Return species available in a given Smogon tier."""
