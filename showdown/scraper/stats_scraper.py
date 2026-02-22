@@ -155,7 +155,7 @@ class StatsScraper:
             moves = self._normalize_weighted(data.get("Moves", {}))
             items = self._normalize_weighted(data.get("Items", {}))
             abilities = self._normalize_weighted(data.get("Abilities", {}))
-            spreads = self._normalize_weighted(data.get("Spreads", {}))
+            spreads = self._normalize_spreads(data.get("Spreads", {}))
             teammates = self._normalize_weighted(data.get("Teammates", {}))
 
             # Counters have a special format: [koed_pct, switched_pct, ...]
@@ -219,6 +219,18 @@ class StatsScraper:
             total = 1
         return {
             StatsScraper._to_id(k): (v / total) * 100
+            for k, v in d.items()
+            if k and k.strip()
+        }
+
+    @staticmethod
+    def _normalize_spreads(d: dict) -> dict[str, float]:
+        """Normalize spread data, preserving Nature:EV format."""
+        total = sum(d.values()) if d else 1
+        if total == 0:
+            total = 1
+        return {
+            k.strip(): (v / total) * 100
             for k, v in d.items()
             if k and k.strip()
         }

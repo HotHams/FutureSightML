@@ -14,6 +14,8 @@ from .state import AppState
 from ..teambuilder.evaluator import TeamEvaluator
 from ..teambuilder.genetic import GeneticTeamBuilder
 from ..teambuilder.analysis import TeamAnalyzer
+from ..teambuilder.spread_inference import apply_spreads
+from ..simulator import BattleSimulator, MonteCarloSimulator
 from ..utils.logging_config import setup_logging
 
 log = setup_logging("INFO")
@@ -81,8 +83,8 @@ class TeamRequest(BaseModel):
 class GenerateRequest(BaseModel):
     format_id: str = "gen9ou"
     n_results: int = 5
-    population: int = 200
-    generations: int = 300
+    population: int = 100
+    generations: int = 50
     mutation_rate: float = 0.15
 
 
@@ -95,6 +97,12 @@ class BattleRequest(BaseModel):
     format_id: str = "gen9ou"
     team1: list[PokemonSet]
     team2: list[PokemonSet]
+
+
+class SimulateRequest(BaseModel):
+    team1: list[PokemonSet]
+    team2: list[PokemonSet]
+    n_simulations: int = 100
 
 
 class ImportRequest(BaseModel):
@@ -142,7 +150,11 @@ async def generate_team(req: GenerateRequest):
     if not fs.pokemon_pool:
         raise HTTPException(400, "No Pokemon pool available.")
 
-    evaluator = TeamEvaluator(predictor=fs.ensemble, meta_teams=fs.meta_teams)
+    evaluator = TeamEvaluator(
+        predictor=fs.ensemble,
+        meta_teams=fs.meta_teams,
+        fast_mode=True,
+    )
     builder = GeneticTeamBuilder(
         evaluator=evaluator,
         constraints=fs.constraints,
@@ -158,8 +170,10 @@ async def generate_team(req: GenerateRequest):
 
     teams = []
     for r in results:
+        # Apply inferred EV spreads and natures
+        enriched_team = apply_spreads(r["team"], app_state.pkmn_data)
         team_data = []
-        for p in r["team"]:
+        for p in enriched_team:
             team_data.append({
                 "species": p.get("species", ""),
                 "ability": p.get("ability", ""),
@@ -167,6 +181,7 @@ async def generate_team(req: GenerateRequest):
                 "moves": p.get("moves", []),
                 "tera_type": p.get("tera_type", ""),
                 "evs": p.get("evs", {}),
+                "ivs": p.get("ivs", {}),
                 "nature": p.get("nature", ""),
             })
         teams.append({
@@ -235,6 +250,64 @@ async def predict_battle(req: BattleRequest):
         "team2_win_prob": round((1 - pred["ensemble"]) * 100, 2),
         "neural_prob": round(pred.get("neural", 0.5) * 100, 2) if "neural" in pred else None,
         "xgboost_prob": round(pred.get("xgboost", 0.5) * 100, 2) if "xgboost" in pred else None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Routes: Battle Simulation
+# ---------------------------------------------------------------------------
+
+@app.post("/api/battle/simulate")
+async def simulate_battle(req: SimulateRequest):
+    """Simulate battles between two teams using the Monte Carlo engine.
+
+    Runs turn-by-turn battle simulations with real Pokemon mechanics
+    (type effectiveness, STAB, priority, hazards, status, items, abilities)
+    and returns win rate estimates with detailed statistics.
+    """
+    if not app_state.pkmn_data:
+        raise HTTPException(500, "Pokemon data not loaded")
+
+    team1 = [p.model_dump() for p in req.team1]
+    team2 = [p.model_dump() for p in req.team2]
+    n = min(req.n_simulations, 1000)  # Cap at 1000
+
+    mc = MonteCarloSimulator(app_state.pkmn_data, n_simulations=n)
+
+    loop = asyncio.get_event_loop()
+    results = await loop.run_in_executor(None, mc.estimate_win_rate, team1, team2, n)
+
+    # Summarize — don't return every single simulation detail
+    return {
+        "team1_win_rate": round(results["team1_win_rate"] * 100, 2),
+        "team2_win_rate": round(results["team2_win_rate"] * 100, 2),
+        "tie_rate": round(results["tie_rate"] * 100, 2),
+        "avg_turns": round(results["avg_turns"], 1),
+        "avg_team1_remaining": round(results["avg_team1_remaining"], 2),
+        "avg_team2_remaining": round(results["avg_team2_remaining"], 2),
+        "n_simulations": results["n_simulations"],
+    }
+
+
+@app.post("/api/battle/simulate/single")
+async def simulate_single_battle(req: BattleRequest):
+    """Run a single battle simulation with turn-by-turn details."""
+    if not app_state.pkmn_data:
+        raise HTTPException(500, "Pokemon data not loaded")
+
+    team1 = [p.model_dump() for p in req.team1]
+    team2 = [p.model_dump() for p in req.team2]
+
+    sim = BattleSimulator(app_state.pkmn_data)
+    result = sim.simulate(team1, team2)
+
+    return {
+        "winner": result["winner"],
+        "turns": result["turns"],
+        "team1_remaining": result["team1_remaining"],
+        "team2_remaining": result["team2_remaining"],
+        "team1_hp_pct": round(result["team1_hp_pct"] * 100, 2),
+        "team2_hp_pct": round(result["team2_hp_pct"] * 100, 2),
     }
 
 
@@ -472,6 +545,15 @@ async def analyze_coverage(req: EvaluateRequest):
     return {"format": req.format_id, **result}
 
 
+@app.post("/api/team/analyze/strategy")
+async def analyze_strategy(req: EvaluateRequest):
+    """Explain the team's strategy, roles, win conditions, and game plan."""
+    analyzer = TeamAnalyzer(pokemon_data=app_state.pkmn_data)
+    team = [p.model_dump() for p in req.team]
+    result = analyzer.explain_strategy(team)
+    return {"format": req.format_id, **result}
+
+
 @app.post("/api/team/analyze/full")
 async def full_analysis(req: EvaluateRequest):
     """Run all analysis tools on a team at once."""
@@ -488,6 +570,7 @@ async def full_analysis(req: EvaluateRequest):
     archetype = analyzer.detect_archetype(team)
     tera = analyzer.optimize_tera_types(team, meta_teams)
     coverage = analyzer.coverage_analysis(team)
+    strategy = analyzer.explain_strategy(team)
 
     result = {
         "format": fmt,
@@ -495,6 +578,7 @@ async def full_analysis(req: EvaluateRequest):
         "archetype": archetype,
         "tera_suggestions": tera,
         "coverage": coverage,
+        "strategy": strategy,
     }
 
     # Add threat analysis if meta teams available

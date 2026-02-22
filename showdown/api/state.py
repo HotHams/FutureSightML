@@ -91,13 +91,16 @@ class AppState:
                 pokemon_dim=model_cfg.get("pokemon_hidden_dim", 128),
                 team_dim=model_cfg.get("team_hidden_dim", 256),
                 attention_heads=model_cfg.get("attention_heads", 4),
-                dropout=model_cfg.get("dropout", 0.2),
+                dropout=model_cfg.get("dropout", 0.25),
+                continuous_dim=model_cfg.get("continuous_dim", 64),
+                rating_dim=model_cfg.get("rating_dim", 6),
             )
             if trainer.load_neural(neural_model, fmt) is None:
                 neural_model = None
             else:
                 neural_model.eval()
-        except Exception:
+        except Exception as e:
+            log.warning("Failed to load neural model for %s: %s", fmt, e)
             neural_model = None
 
         # XGBoost model
@@ -116,13 +119,20 @@ class AppState:
             device=self._device,
         )
 
+        # Load calibrated ensemble weights if available
+        weights_path = Path(checkpoint_dir) / f"ensemble_{fmt}_weights.json"
+        ensemble.load_weights(weights_path)
+
         # Meta analyzer
         meta_analyzer = MetaAnalyzer(self.db)
         meta_teams = await meta_analyzer.build_meta_teams(fmt, n_teams=50)
 
+        # Pre-compute meta team XGBoost features for fast genetic algo evaluation
+        ensemble.precompute_meta_features(meta_teams)
+
         constraints = FormatConstraints(fmt, pokemon_data=self.pkmn_data)
 
-        # Build pokemon pool
+        # Build pokemon pool (try usage stats first, fall back to replays)
         pokemon_pool = []
         year_month = await self.db.get_latest_usage_month(fmt)
         if year_month:
@@ -135,6 +145,12 @@ class AppState:
                         usage_parsed, top_n=80, sets_per_pokemon=4
                     )
                     break
+
+        if not pokemon_pool:
+            log.info("No usage stats for %s, building pool from replays...", fmt)
+            pokemon_pool = await meta_analyzer.build_pool_from_replays(
+                fmt, top_n=80, sets_per_pokemon=4
+            )
 
         return FormatState(
             format_id=fmt,

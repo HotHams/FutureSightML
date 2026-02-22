@@ -129,6 +129,7 @@ class Database:
         format_id: str,
         min_rating: int = 0,
         limit: int | None = None,
+        max_age_days: int | None = None,
     ) -> list[dict[str, Any]]:
         """Fetch battles with both teams for training. Returns list of dicts."""
         query = """
@@ -142,6 +143,11 @@ class Database:
               AND (COALESCE(r.rating1, 0) >= ? OR COALESCE(r.rating2, 0) >= ?)
         """
         params: list[Any] = [format_id, min_rating, min_rating]
+        if max_age_days is not None:
+            import time
+            cutoff = int(time.time()) - max_age_days * 86400
+            query += " AND r.upload_time >= ?"
+            params.append(cutoff)
         if limit:
             query += " LIMIT ?"
             params.append(limit)

@@ -23,9 +23,13 @@ class TeamEvaluator:
         self,
         predictor: EnsemblePredictor,
         meta_teams: list[list[dict]],
+        fast_mode: bool = False,
+        n_sample: int | None = None,
     ):
         self.predictor = predictor
         self.meta_teams = meta_teams
+        self.fast_mode = fast_mode
+        self.n_sample = n_sample
         self._cache: dict[str, float] = {}
 
     def evaluate(self, team: list[dict]) -> float:
@@ -41,7 +45,13 @@ class TeamEvaluator:
         if not self.meta_teams:
             return 0.5
 
-        winrate = self.predictor.predict_team_winrate(team, self.meta_teams)
+        if self.fast_mode:
+            winrate = self.predictor.predict_team_winrate_fast(
+                team, n_sample=self.n_sample,
+            )
+        else:
+            winrate = self.predictor.predict_team_winrate(team, self.meta_teams)
+
         self._cache[cache_key] = winrate
         return winrate
 
