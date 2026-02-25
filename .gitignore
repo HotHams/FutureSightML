@@ -15,6 +15,8 @@ data/raw/
 data/processed/
 data/checkpoints/
 *.db
+*.db-shm
+*.db-wal
 *.sqlite3
 *.pt
 *.pth
@@ -28,3 +30,7 @@ Thumbs.db
 wandb/
 runs/
 .claude/
+gui/node_modules/
+gui/package-lock.json
+gui/dist/
+data/pools/

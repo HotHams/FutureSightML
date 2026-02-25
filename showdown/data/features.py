@@ -17,6 +17,8 @@ from ..utils.constants import (
     TYPES, TYPE_TO_IDX, NUM_TYPES, STAT_NAMES,
     type_effectiveness, type_effectiveness_against, TEAM_SIZE,
     NATURES, calc_stat, IV_DEFAULT, LEVEL_100,
+    extract_gen, get_type_chart_for_gen, get_stat_defaults,
+    type_effectiveness_gen, type_effectiveness_against_gen,
 )
 from .mechanics import (
     ITEM_EFFECTS, ABILITY_EFFECTS,
@@ -51,17 +53,32 @@ class FeatureExtractor:
     # Backward-compat class-level constant
     CHOICE_ITEMS = {"choiceband", "choicespecs", "choicescarf"}
 
-    def __init__(self, pokemon_data=None):
+    def __init__(self, pokemon_data=None, gen: int = 9):
         """
         Args:
             pokemon_data: A loaded PokemonDataLoader instance. Required for
                          engineered features (type info, base stats).
+            gen: Generation number (1-9). Controls type chart, stat formulas,
+                 and normalization constants.
         """
         self.pokemon_data = pokemon_data
+        self.gen = gen
         self._species_idx: dict[str, int] | None = None
         self._move_idx: dict[str, int] | None = None
         self._item_idx: dict[str, int] | None = None
         self._ability_idx: dict[str, int] | None = None
+
+        # Per-generation type system
+        gen_types, gen_type_to_idx, gen_chart, _ = get_type_chart_for_gen(gen)
+        self._gen_types: list[str] = gen_types
+        self._gen_type_to_idx: dict[str, int] = gen_type_to_idx
+        self._gen_chart = gen_chart
+
+        # Per-generation stat defaults
+        self._stat_defaults = get_stat_defaults(gen)
+        # Stat normalization ceiling (Gen 1-2 have lower stat ranges)
+        self._stat_norm = 400.0 if gen <= 2 else 600.0
+
         self._init_move_sets()
 
     def _init_move_sets(self):
@@ -163,6 +180,21 @@ class FeatureExtractor:
                 self.BURN_MOVES | self.PARA_MOVES | self.SLEEP_MOVES
                 | self.TOXIC_MOVES
             )
+
+    # ------------------------------------------------------------------
+    # Gen-aware type effectiveness helpers (instance methods)
+    # ------------------------------------------------------------------
+
+    def _type_eff(self, atk_type: str, def_type: str) -> float:
+        """Single type-vs-type effectiveness using this instance's gen chart."""
+        return self._gen_chart.get((atk_type, def_type), 1.0)
+
+    def _type_eff_against(self, atk_type: str, def_types: list[str]) -> float:
+        """Combined effectiveness against a Pokemon's type(s)."""
+        mult = 1.0
+        for dt in def_types:
+            mult *= self._gen_chart.get((atk_type, dt), 1.0)
+        return mult
 
     def build_vocab(self) -> dict[str, dict[str, int]]:
         """Build vocabulary mappings from the loaded pokemon data.
@@ -298,14 +330,18 @@ class FeatureExtractor:
         base_stats = self._get_base_stats(species_id)
         if base_stats:
             for i, sn in enumerate(STAT_NAMES):
-                feats[i] = base_stats.get(sn, 0) / 255.0
+                val = base_stats.get(sn, 0)
+                # Gen 1: unified Special stat — copy to both SpA and SpD slots
+                if self.gen <= 1 and sn in ("spa", "spd"):
+                    val = base_stats.get("spa", base_stats.get("spd", 0))
+                feats[i] = val / 255.0
 
         # Computed stats [6-11]
         computed = None
         if base_stats:
             computed = self._compute_actual_stats(pkmn, base_stats)
             for i, sn in enumerate(STAT_NAMES):
-                feats[6 + i] = computed.get(sn, 0) / 600.0
+                feats[6 + i] = computed.get(sn, 0) / self._stat_norm
 
         # Type encoding [12-13]
         types = self._get_types(species_id)
@@ -319,7 +355,7 @@ class FeatureExtractor:
         # Defensive profile [14-31]
         if types:
             for atk_idx, atk_type in enumerate(TYPES):
-                eff = type_effectiveness_against(atk_type, types)
+                eff = self._type_eff_against(atk_type, types)
                 if eff == 0:
                     feats[14 + atk_idx] = -4.0
                 else:
@@ -447,22 +483,33 @@ class FeatureExtractor:
         evs = pkmn.get("evs", {})
         ivs = pkmn.get("ivs", {})
 
-        if not nature_name or not evs or not any(v > 0 for v in evs.values()):
-            spread = self._infer_spread(pkmn)
-            nature_name = nature_name or spread.get("nature", "Hardy")
-            if not evs or not any(v > 0 for v in evs.values()):
-                evs = spread.get("evs", {})
+        # Gen 1-2: no natures, different IV/EV defaults
+        if self.gen <= 2:
+            nature_name = "Hardy"  # no natures in Gen 1-2
             if not ivs:
-                ivs = spread.get("ivs", {})
+                ivs = {sn: self._stat_defaults["iv"] for sn in STAT_NAMES}
+            if not evs or not any(v > 0 for v in evs.values()):
+                evs = {sn: self._stat_defaults["ev"] for sn in STAT_NAMES}
+        else:
+            if not nature_name or not evs or not any(v > 0 for v in evs.values()):
+                spread = self._infer_spread(pkmn)
+                nature_name = nature_name or spread.get("nature", "Hardy")
+                if not evs or not any(v > 0 for v in evs.values()):
+                    evs = spread.get("evs", {})
+                if not ivs:
+                    ivs = spread.get("ivs", {})
 
         nature_mults = NATURES.get(nature_name, {})
         computed = {}
         for sn in STAT_NAMES:
             base = base_stats.get(sn, 80)
-            iv = ivs.get(sn, IV_DEFAULT)
+            # Gen 1: unified Special -> copy to both SpA and SpD
+            if self.gen <= 1 and sn in ("spa", "spd"):
+                base = base_stats.get("spa", base_stats.get("spd", 80))
+            iv = ivs.get(sn, self._stat_defaults["iv"])
             ev = evs.get(sn, 0)
             nat_mult = nature_mults.get(sn, 1.0)
-            computed[sn] = calc_stat(base, iv, ev, LEVEL_100, nat_mult, sn == "hp")
+            computed[sn] = calc_stat(base, iv, ev, LEVEL_100, nat_mult, sn == "hp", self.gen)
         return computed
 
     def _infer_spread(self, pkmn: dict) -> dict:
@@ -489,17 +536,19 @@ class FeatureExtractor:
         t1_cont = self.team_to_continuous(battle["team1"])
         t2_cont = self.team_to_continuous(battle["team2"])
 
-        # Rating features (6 dimensions) — only rating1 is available from API
+        # Rating features (6 dimensions) — both players' pre-battle Elo
         r1 = battle.get("rating1") or 0
-        has_rating = float(r1 > 0)
+        r2 = battle.get("rating2") or 0
+        has_both = r1 > 0 and r2 > 0
         r1_safe = r1 if r1 > 0 else 1500
+        r2_safe = r2 if r2 > 0 else 1500
         rating_features = np.array([
-            r1_safe / 2000.0,                     # normalized rating
-            has_rating,                            # whether we have rating data
-            float(r1_safe > 1500),                 # above average flag
-            float(r1_safe > 1700),                 # high rated flag
-            max(0, (r1_safe - 1500)) / 500.0,      # how far above average
-            float(r1_safe < 1300),                 # low rated flag (noisy game)
+            r1_safe / 2000.0,                      # P1 normalized rating
+            r2_safe / 2000.0,                      # P2 normalized rating
+            (r1_safe - r2_safe) / 400.0,           # rating difference (key predictor)
+            float(has_both),                       # data quality flag
+            max(r1_safe, r2_safe) / 2000.0,        # game quality (higher-rated player)
+            abs(r1_safe - r2_safe) / 400.0,        # matchup lopsidedness
         ], dtype=np.float32)
 
         return {
@@ -580,7 +629,7 @@ class FeatureExtractor:
                 if move_data and move_data.get("category") != "Status":
                     move_type = move_data.get("type", "")
                     for def_idx, def_type in enumerate(TYPES):
-                        eff = type_effectiveness_against(move_type, [def_type])
+                        eff = self._type_eff_against(move_type, [def_type])
                         if eff >= 2.0:
                             off_coverage[def_idx] = 1.0
         features.extend(off_coverage.tolist())
@@ -591,7 +640,7 @@ class FeatureExtractor:
             best_resist = 4.0
             for types in info["types_list"]:
                 if types:
-                    eff = type_effectiveness_against(atk_type, types)
+                    eff = self._type_eff_against(atk_type, types)
                     best_resist = min(best_resist, eff)
             def_coverage[atk_idx] = best_resist
         features.extend(def_coverage.tolist())
@@ -702,17 +751,19 @@ class FeatureExtractor:
         # Matchup interaction features
         matchup_feat = self._matchup_features(t1, t2)
 
-        # Rating features for XGBoost (6) — only rating1 available from API
+        # Rating features for XGBoost (6) — both players' pre-battle Elo
         r1 = battle.get("rating1") or 0
-        has_rating = float(r1 > 0)
+        r2 = battle.get("rating2") or 0
+        has_both = r1 > 0 and r2 > 0
         r1_safe = r1 if r1 > 0 else 1500
+        r2_safe = r2 if r2 > 0 else 1500
         rating_feat = np.array([
-            r1_safe / 2000.0,
-            has_rating,
-            float(r1_safe > 1500),
-            float(r1_safe > 1700),
-            max(0, (r1_safe - 1500)) / 500.0,
-            float(r1_safe < 1300),
+            r1_safe / 2000.0,                      # P1 normalized rating
+            r2_safe / 2000.0,                      # P2 normalized rating
+            (r1_safe - r2_safe) / 400.0,           # rating difference (key predictor)
+            float(has_both),                       # data quality flag
+            max(r1_safe, r2_safe) / 2000.0,        # game quality
+            abs(r1_safe - r2_safe) / 400.0,        # matchup lopsidedness
         ], dtype=np.float32)
 
         features = np.concatenate([t1_feat, t2_feat, diff, matchup_feat, rating_feat])
@@ -757,7 +808,7 @@ class FeatureExtractor:
                 for move_name in p1.get("moves", []):
                     move_data = self._get_move(move_name)
                     if move_data and move_data.get("category") != "Status":
-                        eff = type_effectiveness_against(move_data.get("type", ""), types2)
+                        eff = self._type_eff_against(move_data.get("type", ""), types2)
                         if eff >= 2.0:
                             hit_se = True
                             break
@@ -778,7 +829,7 @@ class FeatureExtractor:
                 for move_name in p2.get("moves", []):
                     move_data = self._get_move(move_name)
                     if move_data and move_data.get("category") != "Status":
-                        eff = type_effectiveness_against(move_data.get("type", ""), types1)
+                        eff = self._type_eff_against(move_data.get("type", ""), types1)
                         if eff >= 2.0:
                             hit_se = True
                             break
@@ -798,7 +849,7 @@ class FeatureExtractor:
                 for p1 in team1:
                     types1 = self._get_types(_to_id(p1.get("species", "")))
                     if types1:
-                        eff = type_effectiveness_against(stab_type, types1)
+                        eff = self._type_eff_against(stab_type, types1)
                         if eff < 1.0:
                             resist_score += 1
                             break
@@ -814,7 +865,7 @@ class FeatureExtractor:
                 for p2 in team2:
                     types2 = self._get_types(_to_id(p2.get("species", "")))
                     if types2:
-                        eff = type_effectiveness_against(stab_type, types2)
+                        eff = self._type_eff_against(stab_type, types2)
                         if eff < 1.0:
                             resist_score_rev += 1
                             break
@@ -877,7 +928,7 @@ class FeatureExtractor:
             for stab_type in types1:
                 for p2 in team2:
                     types2 = self._get_types(_to_id(p2.get("species", "")))
-                    if types2 and type_effectiveness_against(stab_type, types2) == 0:
+                    if types2 and self._type_eff_against(stab_type, types2) == 0:
                         t1_immune += 1
                         break
         t2_immune = 0
@@ -886,7 +937,7 @@ class FeatureExtractor:
             for stab_type in types2:
                 for p1 in team1:
                     types1 = self._get_types(_to_id(p1.get("species", "")))
-                    if types1 and type_effectiveness_against(stab_type, types1) == 0:
+                    if types1 and self._type_eff_against(stab_type, types1) == 0:
                         t2_immune += 1
                         break
         features.extend([t1_immune / max(len(team1) * 2, 1), t2_immune / max(len(team2) * 2, 1)])
@@ -1004,7 +1055,9 @@ class FeatureExtractor:
         def_data = {
             "def": max(def_base.get("def", 80), 1),
             "spd": max(def_base.get("spd", 80), 1),
-            "hp_actual": max(2 * hp_val + 204, 1),
+            "hp_actual": max(calc_stat(hp_val, self._stat_defaults["iv"],
+                                       self._stat_defaults["ev"], LEVEL_100,
+                                       1.0, True, self.gen), 1),
             "types": def_types,
             "item_id": def_item_id,
             "ability_id": def_ability_id,
@@ -1021,7 +1074,7 @@ class FeatureExtractor:
             move_data = self._get_move(move_name)
             if not move_data:
                 continue
-            dmg = estimate_damage_pct(atk_data, def_data, move_data)
+            dmg = estimate_damage_pct(atk_data, def_data, move_data, type_chart=self._gen_chart)
             if dmg > best:
                 best = dmg
         return best
@@ -1032,7 +1085,7 @@ class FeatureExtractor:
         types = self._get_types(species_id)
         if not types:
             return 0.125
-        eff = type_effectiveness_against("Rock", types)
+        eff = self._type_eff_against("Rock", types)
         return min(eff * 0.125, 0.5)  # cap at 50%
 
     # ------------------------------------------------------------------
@@ -1260,7 +1313,7 @@ class FeatureExtractor:
             for pkmn in team:
                 types = self._get_types(_to_id(pkmn.get("species", "")))
                 if types:
-                    eff = type_effectiveness_against(atk_type, types)
+                    eff = self._type_eff_against(atk_type, types)
                     if eff >= 2.0:
                         se_count += 1
                     if eff < 1.0:
@@ -1633,7 +1686,7 @@ class FeatureExtractor:
                     continue
                 for atk_idx in range(NUM_TYPES):
                     atk_type = TYPES[atk_idx]
-                    def_eff[atk_idx] *= type_effectiveness(atk_type, dt)
+                    def_eff[atk_idx] *= self._type_eff(atk_type, dt)
 
             type_indices = [TYPE_TO_IDX[t] for t in types if t in TYPE_TO_IDX]
 
@@ -1657,7 +1710,9 @@ class FeatureExtractor:
                 "def": dfn,
                 "spa": spa,
                 "spd": spd,
-                "hp_actual": max(2 * hp + 204, 1),
+                "hp_actual": max(calc_stat(hp, self._stat_defaults["iv"],
+                                          self._stat_defaults["ev"], LEVEL_100,
+                                          1.0, True, self.gen), 1),
                 "moves_data": moves_data,
                 "move_ids": move_ids,
                 "stab_types": set(types),
@@ -1680,7 +1735,7 @@ class FeatureExtractor:
         """Stealth Rock damage from pre-computed types."""
         if not types:
             return 0.125
-        eff = type_effectiveness_against("Rock", types)
+        eff = self._type_eff_against("Rock", types)
         return min(eff * 0.125, 0.5)
 
     def _matchup_features_fast(
@@ -1782,10 +1837,10 @@ class FeatureExtractor:
         threat_t2 = []
         for p1 in t1_data:
             for p2 in t2_data:
-                threat_t1.append(estimate_best_move_damage(p1, p2))
+                threat_t1.append(estimate_best_move_damage(p1, p2, type_chart=self._gen_chart))
         for p2 in t2_data:
             for p1 in t1_data:
-                threat_t2.append(estimate_best_move_damage(p2, p1))
+                threat_t2.append(estimate_best_move_damage(p2, p1, type_chart=self._gen_chart))
 
         if threat_t1:
             features.extend([np.mean(threat_t1), max(threat_t1), min(threat_t1)])
@@ -1909,7 +1964,7 @@ class FeatureExtractor:
 
         Uses item/ability modifiers from precompute_team_data().
         """
-        return estimate_best_move_damage(atk_data, def_data)
+        return estimate_best_move_damage(atk_data, def_data, type_chart=self._gen_chart)
 
     # ------------------------------------------------------------------
     # Helper methods

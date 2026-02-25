@@ -277,10 +277,18 @@ class EnsemblePredictor:
         # Vectorized matchup features across ALL meta teams at once
         matchup_feats = self._compute_matchup_batch(t1_data, self._meta_arrays)
 
-        # Rating features (team builder: both at 1500, no diff)
+        # Rating features — match the default encoding from battle_to_engineered
+        # when no real ratings are available: r1=0, r2=0 → r1_safe=1500, r2_safe=1500
+        #   [0] r1_safe/2000 = 0.75
+        #   [1] r2_safe/2000 = 0.75
+        #   [2] (r1-r2)/400  = 0.0  (equal ratings)
+        #   [3] has_both      = 0.0  (no real rating data)
+        #   [4] max/2000      = 0.75
+        #   [5] |diff|/400    = 0.0
         rating_feat = np.zeros((n, 6), dtype=np.float32)
-        rating_feat[:, 2] = 0.75
-        rating_feat[:, 3] = 0.75
+        rating_feat[:, 0] = 0.75
+        rating_feat[:, 1] = 0.75
+        rating_feat[:, 4] = 0.75
 
         features = np.concatenate(
             [t1_repeated, self._meta_xgb_feats, diff, matchup_feats, rating_feat],
