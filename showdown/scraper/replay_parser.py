@@ -43,6 +43,8 @@ class BattleResult:
     turns: int = 0
     team1: list[PokemonSet] = field(default_factory=list)
     team2: list[PokemonSet] = field(default_factory=list)
+    rating1: int | None = None  # Pre-battle Elo from |player| line
+    rating2: int | None = None  # Pre-battle Elo from |player| line
 
     def is_valid(self) -> bool:
         return (
@@ -153,12 +155,28 @@ class ReplayParser:
         return result
 
     def _handle_player(self, parts: list[str], result: BattleResult) -> None:
+        """Handle |player|p1|Username|avatar|RATING"""
         player_id = parts[2].strip()  # p1 or p2
         player_name = parts[3].strip()
+        if not player_name:
+            return  # Skip empty player lines (e.g. |player|p1| at end of log)
+
+        # Extract rating from parts[5] if present
+        rating = None
+        if len(parts) >= 6 and parts[5].strip():
+            try:
+                rating = int(parts[5].strip())
+            except ValueError:
+                pass
+
         if player_id == "p1":
             result.player1 = player_name
+            if rating is not None:
+                result.rating1 = rating
         elif player_id == "p2":
             result.player2 = player_name
+            if rating is not None:
+                result.rating2 = rating
 
     def _handle_poke(self, parts: list[str], player_pokemon: dict) -> None:
         """Handle team preview: |poke|p1|Species, L50, M|item"""

@@ -32,10 +32,11 @@ class PokemonEncoder(nn.Module):
         continuous_dim: int = 64,
     ):
         super().__init__()
-        self.species_embed = nn.Embedding(num_species, species_dim, padding_idx=0)
-        self.move_embed = nn.Embedding(num_moves, move_dim, padding_idx=0)
-        self.item_embed = nn.Embedding(num_items, item_dim, padding_idx=0)
-        self.ability_embed = nn.Embedding(num_abilities, ability_dim, padding_idx=0)
+        # Ensure at least 1 entry so padding_idx=0 is valid (e.g. Gen 1 has no items)
+        self.species_embed = nn.Embedding(max(num_species, 1), species_dim, padding_idx=0)
+        self.move_embed = nn.Embedding(max(num_moves, 1), move_dim, padding_idx=0)
+        self.item_embed = nn.Embedding(max(num_items, 1), item_dim, padding_idx=0)
+        self.ability_embed = nn.Embedding(max(num_abilities, 1), ability_dim, padding_idx=0)
 
         # Projection for continuous per-Pokemon features (e.g. base stats, EVs, IVs)
         self.continuous_proj = nn.Sequential(

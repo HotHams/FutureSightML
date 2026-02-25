@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .state import AppState
 from ..teambuilder.evaluator import TeamEvaluator
@@ -16,6 +16,7 @@ from ..teambuilder.genetic import GeneticTeamBuilder
 from ..teambuilder.analysis import TeamAnalyzer
 from ..teambuilder.spread_inference import apply_spreads
 from ..simulator import BattleSimulator, MonteCarloSimulator
+from ..utils.constants import extract_gen
 from ..utils.logging_config import setup_logging
 
 log = setup_logging("INFO")
@@ -46,7 +47,10 @@ app.add_middleware(
 )
 
 # Serve the GUI
-_gui_dir = Path(__file__).resolve().parent.parent.parent / "gui" / "static"
+from ..config import resolve_data_path as _resolve
+_gui_dir = _resolve("gui/static")
+if not _gui_dir.exists():
+    _gui_dir = Path(__file__).resolve().parent.parent.parent / "gui" / "static"
 if _gui_dir.exists():
     app.mount("/static", StaticFiles(directory=str(_gui_dir)), name="static")
 
@@ -66,14 +70,15 @@ async def root():
 # ---------------------------------------------------------------------------
 
 class PokemonSet(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     species: str
-    ability: str = ""
-    item: str = ""
+    ability: str | None = ""
+    item: str | None = ""
     moves: list[str] = Field(default_factory=list)
-    tera_type: str = ""
-    evs: dict[str, int] = Field(default_factory=dict)
-    nature: str = ""
-    level: int = 100
+    tera_type: str | None = ""
+    evs: dict[str, int] | None = Field(default_factory=dict)
+    nature: str | None = ""
+    level: int | None = 100
 
 
 class TeamRequest(BaseModel):
@@ -147,8 +152,15 @@ async def generate_team(req: GenerateRequest):
     fs = app_state.formats[fmt]
     if not fs.meta_teams:
         raise HTTPException(400, "No meta teams available. Scrape usage stats first.")
-    if not fs.pokemon_pool:
-        raise HTTPException(400, "No Pokemon pool available.")
+    if len(fs.pokemon_pool) < 6:
+        raise HTTPException(
+            422,
+            "Not enough Pokemon data to generate teams for this format. "
+            f"Only {len(fs.pokemon_pool)} sets available (need at least 6). "
+            "Try a more popular format.",
+        )
+
+    gen = extract_gen(fmt)
 
     evaluator = TeamEvaluator(
         predictor=fs.ensemble,
@@ -168,29 +180,50 @@ async def generate_team(req: GenerateRequest):
     loop = asyncio.get_event_loop()
     results = await loop.run_in_executor(None, builder.build, req.n_results)
 
+    # Build a standard evaluator (non-fast) to compute true predicted win rates
+    # that match what /api/team/evaluate returns.
+    std_evaluator = TeamEvaluator(
+        predictor=fs.ensemble,
+        meta_teams=fs.meta_teams,
+    )
+
     teams = []
     for r in results:
-        # Apply inferred EV spreads and natures
-        enriched_team = apply_spreads(r["team"], app_state.pkmn_data)
+        # Apply inferred EV spreads and natures (gen-aware)
+        enriched_team = apply_spreads(r["team"], app_state.pkmn_data, gen=gen)
         team_data = []
         for p in enriched_team:
-            team_data.append({
+            pkmn_out = {
                 "species": p.get("species", ""),
-                "ability": p.get("ability", ""),
-                "item": p.get("item", ""),
                 "moves": p.get("moves", []),
-                "tera_type": p.get("tera_type", ""),
-                "evs": p.get("evs", {}),
-                "ivs": p.get("ivs", {}),
-                "nature": p.get("nature", ""),
-            })
+            }
+            # Gen 3+: abilities exist
+            if gen >= 3:
+                pkmn_out["ability"] = p.get("ability", "")
+            # Gen 2+: items exist
+            if gen >= 2:
+                pkmn_out["item"] = p.get("item", "")
+            # Gen 3+: natures and EVs exist
+            if gen >= 3:
+                pkmn_out["nature"] = p.get("nature", "")
+                pkmn_out["evs"] = p.get("evs", {})
+                pkmn_out["ivs"] = p.get("ivs", {})
+            # Gen 9 only: tera types
+            if gen >= 9:
+                pkmn_out["tera_type"] = p.get("tera_type", "")
+            team_data.append(pkmn_out)
+
+        # Compute true predicted win rate (same as /api/team/evaluate)
+        detailed = std_evaluator.evaluate_detailed(r["team"])
+        predicted_wr = round(detailed["overall_winrate"] * 100, 2)
+
         teams.append({
             "pokemon": team_data,
-            "predicted_winrate": round(r["fitness"] * 100, 2),
+            "predicted_winrate": predicted_wr,
             "generation_found": r["generation"],
         })
 
-    return {"format": fmt, "teams": teams}
+    return {"format": fmt, "gen": gen, "teams": teams}
 
 
 @app.post("/api/team/evaluate")
@@ -605,11 +638,39 @@ async def full_analysis(req: EvaluateRequest):
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _sprite_id(species: str) -> str:
+    """Convert a species name/ID to a Showdown sprite-compatible name.
+
+    Inserts hyphens before known forme suffixes since Showdown sprites
+    use hyphenated names (e.g. 'weezing-galar') while our IDs are
+    concatenated (e.g. 'weezinggalar').
+    """
+    import re
+    name = re.sub(r"[^a-z0-9]", "", species.lower())
+    suffixes = [
+        'alola', 'galar', 'hisui', 'paldea',
+        'megax', 'megay', 'mega',
+        'primal', 'origin', 'therian', 'incarnate',
+        'ice', 'shadow', 'rapid', 'single', 'crowned',
+        'heat', 'wash', 'frost', 'fan', 'mow',
+        'sky', 'land', 'trash', 'sandy',
+        'attack', 'defense', 'speed',
+        'bloodmoon', 'wellspring', 'hearthflame', 'cornerstone',
+        'stellar', 'terastal',
+        'bug', 'dark', 'dragon', 'electric', 'fairy', 'fighting', 'fire',
+        'flying', 'ghost', 'grass', 'ground', 'poison',
+        'psychic', 'rock', 'steel', 'water',
+    ]
+    for s in suffixes:
+        if name.endswith(s) and len(name) > len(s):
+            name = name[:-len(s)] + '-' + s
+            break
+    return name
+
+
 def _sprite_url(species: str, animated: bool = False) -> str:
     """Get Showdown sprite URL for a Pokemon."""
-    name = species.lower().replace(" ", "").replace("'", "").replace(".", "")
-    # Handle common forme names
-    name = name.replace("-mega", "-mega").replace("-alola", "-alola")
+    name = _sprite_id(species)
     if animated:
         return f"https://play.pokemonshowdown.com/sprites/ani/{name}.gif"
     return f"https://play.pokemonshowdown.com/sprites/gen5/{name}.png"

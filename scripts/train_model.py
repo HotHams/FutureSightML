@@ -21,6 +21,7 @@ from showdown.config import load_config
 from showdown.data.database import Database
 from showdown.data.pokemon_data import PokemonDataLoader
 from showdown.data.features import FeatureExtractor
+from showdown.utils.constants import extract_gen
 from showdown.data.preprocessor import DataPreprocessor
 from showdown.models.win_predictor import WinPredictor
 from showdown.models.xgb_predictor import XGBPredictor
@@ -82,7 +83,8 @@ async def main():
     await pkmn_data.load()
 
     # Feature extraction
-    fe = FeatureExtractor(pokemon_data=pkmn_data)
+    gen = extract_gen(args.format)
+    fe = FeatureExtractor(pokemon_data=pkmn_data, gen=gen)
     vocab = fe.build_vocab_from_battles(battles)
     vocab_sizes = fe.vocab_sizes
     log.info("Vocab sizes: %s", vocab_sizes)

@@ -36,12 +36,14 @@ class DataPreprocessor:
         """Compute sample weight based on rating quality.
 
         Higher-rated games get more weight since team composition
-        matters more at higher Elo.
+        matters more at higher Elo. Uses the higher of the two ratings.
         """
         r1 = battle.get("rating1") or 0
-        if r1 <= 0:
+        r2 = battle.get("rating2") or 0
+        best_rating = max(r1, r2)
+        if best_rating <= 0:
             return 1.0
-        return 1.0 + max(0, (r1 - 1500)) / 500.0
+        return 1.0 + max(0, (best_rating - 1500)) / 500.0
 
     def prepare_neural_dataset(
         self, battles: list[dict], augment: bool = True
@@ -78,10 +80,13 @@ class DataPreprocessor:
                 samples.append(sample)
 
                 if augment:
-                    # Swap rating_features: negate rating_diff (idx 0), rest symmetric
+                    # Swap rating_features for team swap:
+                    # [0] r1/2000 <-> [1] r2/2000, [2] negate diff, [3-5] symmetric
                     rf = sample["rating_features"]
                     swapped_rf = rf.copy()
-                    swapped_rf[0] = -swapped_rf[0]
+                    swapped_rf[0], swapped_rf[1] = rf[1], rf[0]  # swap P1/P2 ratings
+                    swapped_rf[2] = -rf[2]  # negate rating difference
+                    # [3] has_both, [4] max, [5] abs_diff — unchanged (symmetric)
                     swapped = {
                         "team1_species": sample["team2_species"],
                         "team1_moves": sample["team2_moves"],
@@ -146,6 +151,8 @@ class DataPreprocessor:
                         "team1": battle["team2"],
                         "team2": battle["team1"],
                         "winner": 2 if battle["winner"] == 1 else 1,
+                        "rating1": battle.get("rating2"),  # swap ratings
+                        "rating2": battle.get("rating1"),
                     })
                     X_list.append(feat_swapped)
                     y_list.append(label_swapped)

@@ -1,7 +1,12 @@
 """Constants for the Pokemon Showdown ML system."""
 
-from enum import Enum
+import math
+import re
 from typing import Dict, Tuple
+
+# ======================================================================
+# Type system — 18 types (Gen 6+ canonical ordering)
+# ======================================================================
 
 TYPES = [
     "Normal", "Fire", "Water", "Electric", "Grass", "Ice",
@@ -10,12 +15,14 @@ TYPES = [
 ]
 
 TYPE_TO_IDX = {t: i for i, t in enumerate(TYPES)}
-NUM_TYPES = len(TYPES)
+NUM_TYPES = len(TYPES)  # always 18
 
-# Complete Gen 9 type effectiveness chart.
-# Key: (attacking_type, defending_type) -> multiplier
-# Only non-1.0 entries are stored; missing = 1.0 (neutral).
-_TYPE_CHART_OVERRIDES: Dict[Tuple[str, str], float] = {
+# ======================================================================
+# Per-generation type charts
+# ======================================================================
+
+# Gen 6+ (current) — the canonical chart already used everywhere.
+_TYPE_CHART_GEN6PLUS: Dict[Tuple[str, str], float] = {
     # Normal
     ("Normal", "Rock"): 0.5, ("Normal", "Ghost"): 0.0, ("Normal", "Steel"): 0.5,
     # Fire
@@ -82,6 +89,120 @@ _TYPE_CHART_OVERRIDES: Dict[Tuple[str, str], float] = {
     ("Fairy", "Dragon"): 2.0, ("Fairy", "Dark"): 2.0, ("Fairy", "Steel"): 0.5,
 }
 
+# Gen 2-5: No Fairy type.  Steel resists Ghost and Dark.
+_TYPE_CHART_GEN2TO5_OVERRIDES: Dict[Tuple[str, str], float] = {
+    # Steel gained Ghost/Dark resistance in Gen 2, lost them in Gen 6
+    ("Ghost", "Steel"): 0.5,
+    ("Dark", "Steel"): 0.5,
+    # Remove Fairy interactions (Fairy doesn't exist)
+    # Any entry involving Fairy as attacker or defender becomes neutral (1.0)
+    # We handle this by excluding Fairy from the valid types list for Gen 2-5
+}
+
+# Gen 1: Only 15 types (no Dark, Steel, Fairy). Several bugs/differences:
+#   - Ghost has NO effect on Psychic (was a bug, intended to be SE)
+#   - Poison is SE against Bug (removed in Gen 2)
+#   - Bug is SE against Poison (removed in Gen 2)
+_TYPE_CHART_GEN1_OVERRIDES: Dict[Tuple[str, str], float] = {
+    ("Ghost", "Psychic"): 0.0,   # Gen 1 bug: Ghost immune to Psychic instead of SE
+    ("Poison", "Bug"): 2.0,      # Poison SE Bug in Gen 1
+    ("Bug", "Poison"): 2.0,      # Bug SE Poison in Gen 1
+    # Remove these Gen 2+ entries that don't apply:
+    # Ghost SE Psychic -> overridden to 0.0 above
+    # Psychic 0.5x Steel -> Steel doesn't exist
+    # Psychic immune Dark -> Dark doesn't exist
+}
+
+# Types available per generation era
+_GEN1_TYPES = [
+    "Normal", "Fire", "Water", "Electric", "Grass", "Ice",
+    "Fighting", "Poison", "Ground", "Flying", "Psychic", "Bug",
+    "Rock", "Ghost", "Dragon",
+]  # 15 types, no Dark/Steel/Fairy
+
+_GEN2TO5_TYPES = [
+    "Normal", "Fire", "Water", "Electric", "Grass", "Ice",
+    "Fighting", "Poison", "Ground", "Flying", "Psychic", "Bug",
+    "Rock", "Ghost", "Dragon", "Dark", "Steel",
+]  # 17 types, no Fairy
+
+
+def extract_gen(format_id: str) -> int:
+    """Extract generation number from a format ID string.
+
+    Examples: 'gen9ou' -> 9, 'gen4ubers' -> 4, 'gen1ou' -> 1, 'gen31v1' -> 3
+    Uses single digit match since generations are 1-9.
+    """
+    m = re.match(r"gen(\d)", format_id.lower())
+    if m:
+        return int(m.group(1))
+    return 9  # default to current gen
+
+
+def get_type_chart_for_gen(gen: int) -> tuple[
+    list[str],                           # types list
+    dict[str, int],                      # type_to_idx
+    Dict[Tuple[str, str], float],        # chart overrides
+    int,                                 # num_types (always 18 for feature dim)
+]:
+    """Return per-generation type system data.
+
+    The types list and type_to_idx reflect which types actually exist in that
+    generation, but num_types is always 18 to keep feature vectors fixed-size.
+    The chart overrides dict maps (atk_type, def_type) -> multiplier.
+    """
+    if gen <= 1:
+        valid_types = _GEN1_TYPES
+        # Start with Gen 6+ chart, apply Gen 1 overrides, and strip
+        # any entries involving non-existent types
+        chart = {}
+        for (at, dt), mult in _TYPE_CHART_GEN6PLUS.items():
+            if at in valid_types and dt in valid_types:
+                chart[(at, dt)] = mult
+        # Apply Gen 1 specific overrides
+        for (at, dt), mult in _TYPE_CHART_GEN1_OVERRIDES.items():
+            if at in valid_types and dt in valid_types:
+                chart[(at, dt)] = mult
+    elif gen <= 5:
+        valid_types = _GEN2TO5_TYPES
+        chart = {}
+        for (at, dt), mult in _TYPE_CHART_GEN6PLUS.items():
+            if at in valid_types and dt in valid_types:
+                chart[(at, dt)] = mult
+        # Apply Gen 2-5 overrides (Steel resists Ghost/Dark)
+        for (at, dt), mult in _TYPE_CHART_GEN2TO5_OVERRIDES.items():
+            if at in valid_types and dt in valid_types:
+                chart[(at, dt)] = mult
+    else:
+        valid_types = TYPES
+        chart = _TYPE_CHART_GEN6PLUS
+
+    valid_type_to_idx = {t: i for i, t in enumerate(valid_types)}
+    return valid_types, valid_type_to_idx, chart, NUM_TYPES
+
+
+def type_effectiveness_gen(atk_type: str, def_type: str,
+                           chart: Dict[Tuple[str, str], float] | None = None) -> float:
+    """Gen-aware type effectiveness for a single type pair."""
+    if chart is None:
+        chart = _TYPE_CHART_GEN6PLUS
+    return chart.get((atk_type, def_type), 1.0)
+
+
+def type_effectiveness_against_gen(atk_type: str, def_types: list[str],
+                                   chart: Dict[Tuple[str, str], float] | None = None) -> float:
+    """Gen-aware combined effectiveness against a Pokemon's type(s)."""
+    if chart is None:
+        chart = _TYPE_CHART_GEN6PLUS
+    mult = 1.0
+    for dt in def_types:
+        mult *= chart.get((atk_type, dt), 1.0)
+    return mult
+
+
+# Keep backward-compatible module-level functions (use Gen 6+ chart)
+_TYPE_CHART_OVERRIDES = _TYPE_CHART_GEN6PLUS
+
 
 def type_effectiveness(atk_type: str, def_type: str) -> float:
     """Return the type effectiveness multiplier for a single attacking type vs defending type."""
@@ -123,20 +244,49 @@ STATUS = "Status"
 FORMAT_SINGLES = "singles"
 FORMAT_DOUBLES = "doubles"
 
-# Map format prefixes to game type
-FORMAT_GAME_TYPE = {
-    "gen9ou": FORMAT_SINGLES,
-    "gen9uu": FORMAT_SINGLES,
-    "gen9ru": FORMAT_SINGLES,
-    "gen9nu": FORMAT_SINGLES,
-    "gen9pu": FORMAT_SINGLES,
-    "gen9ubers": FORMAT_SINGLES,
-    "gen9lc": FORMAT_SINGLES,
-    "gen9monotype": FORMAT_SINGLES,
-    "gen9vgc": FORMAT_DOUBLES,
-    "gen9doublesou": FORMAT_DOUBLES,
-    "gen9doublesuu": FORMAT_DOUBLES,
-}
+# Map format prefixes to game type — covers all generations.
+# get_game_type() fallback handles "doubles"/"vgc" in name for any we miss.
+FORMAT_GAME_TYPE: dict[str, str] = {}
+
+# Generate entries for all gens. Singles tiers:
+_SINGLES_TIERS = [
+    "ou", "uu", "ru", "nu", "pu", "zu", "ubers", "lc", "monotype",
+    "ag", "1v1", "ubersuu", "cap",
+    "battlestadiumsingles", "battlespotsingles", "battlefactorysingles",
+    "customgame",
+]
+_DOUBLES_TIERS = [
+    "doublesou", "doublesuu", "doublesru", "doublesnu", "doubleslc",
+    "doublesubers", "doublesag",
+    "vgc", "battlespotdoubles", "battlestadiumdoubles",
+    "battlefactorydoubles",
+]
+
+for _gen in range(1, 10):
+    for _tier in _SINGLES_TIERS:
+        FORMAT_GAME_TYPE[f"gen{_gen}{_tier}"] = FORMAT_SINGLES
+    for _tier in _DOUBLES_TIERS:
+        FORMAT_GAME_TYPE[f"gen{_gen}{_tier}"] = FORMAT_DOUBLES
+
+# Explicit entries for special/ambiguous formats
+for _gen in range(1, 10):
+    FORMAT_GAME_TYPE[f"gen{_gen}nationaldex"] = FORMAT_SINGLES
+    FORMAT_GAME_TYPE[f"gen{_gen}nationaldexuu"] = FORMAT_SINGLES
+    FORMAT_GAME_TYPE[f"gen{_gen}nationaldexubers"] = FORMAT_SINGLES
+    FORMAT_GAME_TYPE[f"gen{_gen}nationaldexmonotype"] = FORMAT_SINGLES
+    FORMAT_GAME_TYPE[f"gen{_gen}nationaldexag"] = FORMAT_SINGLES
+    FORMAT_GAME_TYPE[f"gen{_gen}nationaldexdoubles"] = FORMAT_DOUBLES
+    FORMAT_GAME_TYPE[f"gen{_gen}2v2doubles"] = FORMAT_DOUBLES
+
+# VGC year-specific formats
+for _year in range(2010, 2027):
+    for _suffix in ["", "regf", "regg", "rege", "regd", "regc", "regb", "rega",
+                     "series1", "series2", "series3", "series4", "series5",
+                     "series6", "series7", "series8", "series9", "series10",
+                     "series11", "series12", "series13"]:
+        FORMAT_GAME_TYPE[f"gen9vgc{_year}{_suffix}"] = FORMAT_DOUBLES
+        for _g in range(3, 9):
+            FORMAT_GAME_TYPE[f"gen{_g}vgc{_year}{_suffix}"] = FORMAT_DOUBLES
 
 
 def get_game_type(format_id: str) -> str:
@@ -163,10 +313,34 @@ LEVEL_100 = 100
 LEVEL_50 = 50
 
 
-def calc_stat(base: int, iv: int, ev: int, level: int, nature_mult: float, is_hp: bool) -> int:
-    """Calculate a Pokemon's actual stat value."""
-    if is_hp:
-        if base == 1:  # Shedinja
-            return 1
-        return ((2 * base + iv + ev // 4) * level // 100) + level + 10
-    return int((((2 * base + iv + ev // 4) * level // 100) + 5) * nature_mult)
+def get_stat_defaults(gen: int) -> dict:
+    """Return default IV/EV/nature values appropriate for a generation."""
+    if gen <= 2:
+        return {"iv": 15, "ev": 65535, "nature_mult": 1.0}
+    return {"iv": 31, "ev": 85, "nature_mult": 1.0}
+
+
+def calc_stat(base: int, iv: int, ev: int, level: int,
+              nature_mult: float, is_hp: bool, gen: int = 9) -> int:
+    """Calculate a Pokemon's actual stat value (gen-aware).
+
+    Gen 1-2: DV system (0-15), Stat Exp (0-65535), no natures.
+    Gen 3+: Modern IV (0-31), EV (0-255), natures.
+    """
+    if gen <= 2:
+        # Gen 1-2 stat formula
+        dv = min(iv, 15)
+        stat_exp = min(ev, 65535)
+        stat_exp_bonus = int(math.ceil(math.sqrt(max(stat_exp, 0)))) // 4
+        if is_hp:
+            if base == 1:  # Shedinja
+                return 1
+            return ((base + dv) * 2 + stat_exp_bonus) * level // 100 + level + 10
+        return int((((base + dv) * 2 + stat_exp_bonus) * level // 100 + 5))
+    else:
+        # Gen 3+ stat formula
+        if is_hp:
+            if base == 1:  # Shedinja
+                return 1
+            return ((2 * base + iv + ev // 4) * level // 100) + level + 10
+        return int((((2 * base + iv + ev // 4) * level // 100) + 5) * nature_mult)

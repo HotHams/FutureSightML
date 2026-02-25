@@ -14,6 +14,72 @@ import torch.nn as nn
 from .embeddings import PokemonEncoder, TeamEncoder
 
 
+class MatchupMatrixBranch(nn.Module):
+    """Blade-Chest decomposition for pairwise Pokemon matchup scoring.
+
+    Each Pokemon representation is projected into offensive and defensive
+    latent spaces. The matchup score M[i,j] = offense_t1[i] · defense_t2[j]
+    captures how well team1's Pokemon i attacks team2's Pokemon j.
+
+    The net advantage matrix (M - M^T) is aggregated into a fixed-size
+    feature vector via a learned projection.
+    """
+
+    def __init__(self, pokemon_dim: int, matchup_latent_dim: int = 32, output_dim: int = 64):
+        super().__init__()
+        self.offense_proj = nn.Sequential(
+            nn.Linear(pokemon_dim, matchup_latent_dim),
+            nn.LayerNorm(matchup_latent_dim),
+            nn.GELU(),
+        )
+        self.defense_proj = nn.Sequential(
+            nn.Linear(pokemon_dim, matchup_latent_dim),
+            nn.LayerNorm(matchup_latent_dim),
+            nn.GELU(),
+        )
+        # Aggregate 6x6 matchup matrix to fixed-size features
+        self.aggregate = nn.Sequential(
+            nn.Linear(36, output_dim),
+            nn.LayerNorm(output_dim),
+            nn.GELU(),
+        )
+
+    def forward(
+        self,
+        t1_pokemon: torch.Tensor,  # (B, 6, pokemon_dim)
+        t2_pokemon: torch.Tensor,  # (B, 6, pokemon_dim)
+        t1_mask: torch.Tensor | None = None,  # (B, 6) True = padded
+        t2_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Compute pairwise matchup features.
+
+        Returns: (B, output_dim) aggregated matchup features.
+        """
+        # Project to offensive/defensive latent spaces (shared weights for both teams)
+        t1_off = self.offense_proj(t1_pokemon)   # (B, 6, d)
+        t1_def = self.defense_proj(t1_pokemon)   # (B, 6, d)
+        t2_off = self.offense_proj(t2_pokemon)   # (B, 6, d)
+        t2_def = self.defense_proj(t2_pokemon)   # (B, 6, d)
+
+        # Matchup matrices: how well each attacker hits each defender
+        # (B, 6, d) @ (B, d, 6) -> (B, 6, 6)
+        t1_attacks_t2 = torch.bmm(t1_off, t2_def.transpose(1, 2))
+        t2_attacks_t1 = torch.bmm(t2_off, t1_def.transpose(1, 2))
+
+        # Net advantage: positive means t1's Pokemon i has advantage over t2's Pokemon j
+        net = t1_attacks_t2 - t2_attacks_t1.transpose(1, 2)  # (B, 6, 6)
+
+        # Mask padded Pokemon
+        if t1_mask is not None:
+            net = net.masked_fill(t1_mask.unsqueeze(-1), 0.0)
+        if t2_mask is not None:
+            net = net.masked_fill(t2_mask.unsqueeze(1), 0.0)
+
+        # Flatten and aggregate through learned projection
+        flat = net.reshape(net.size(0), -1)  # (B, 36)
+        return self.aggregate(flat)  # (B, output_dim)
+
+
 class WinPredictor(nn.Module):
     """End-to-end neural win predictor.
 
@@ -79,9 +145,16 @@ class WinPredictor(nn.Module):
             nn.GELU(),
         )
 
-        # Matchup head: [t1_repr, t2_repr, diff, cross_diff, rating_features]
-        # = team_dim * 3 + team_dim // 2 + rating_dim
-        matchup_input_dim = team_dim * 3 + team_dim // 2 + rating_dim
+        # Pairwise matchup matrix (blade-chest decomposition)
+        self.matchup_dim = team_dim // 4  # output size of matchup branch
+        self.matchup_matrix = MatchupMatrixBranch(
+            pokemon_dim=pokemon_dim,
+            matchup_latent_dim=pokemon_dim // 4,
+            output_dim=self.matchup_dim,
+        )
+
+        # Matchup head: [t1_repr, t2_repr, diff, cross_diff, matchup_matrix, rating_features]
+        matchup_input_dim = team_dim * 3 + team_dim // 2 + self.matchup_dim + rating_dim
         self.matchup_head = nn.Sequential(
             nn.Linear(matchup_input_dim, team_dim),
             nn.LayerNorm(team_dim),
@@ -179,9 +252,12 @@ class WinPredictor(nn.Module):
         cross_diff = self._cross_attend_and_pool(t1_pokemon, t2_pokemon, t1_mask, t2_mask)
         cross_diff = self.cross_proj(cross_diff)  # (B, team_dim // 2)
 
-        # Matchup features: [team1, team2, team1 - team2, cross_diff, rating_features]
+        # Pairwise matchup matrix: blade-chest decomposition
+        matchup_feat = self.matchup_matrix(t1_pokemon, t2_pokemon, t1_mask, t2_mask)
+
+        # Matchup features: [team1, team2, diff, cross_diff, matchup_matrix, rating_features]
         diff = t1_repr - t2_repr
-        parts = [t1_repr, t2_repr, diff, cross_diff]
+        parts = [t1_repr, t2_repr, diff, cross_diff, matchup_feat]
 
         if rating_features is not None:
             parts.append(rating_features)

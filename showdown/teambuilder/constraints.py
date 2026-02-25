@@ -121,10 +121,22 @@ class FormatConstraints:
                 if move_id in self.banned_moves:
                     violations.append(f"Banned move: {move_id} on {species_id}")
 
-            # Check move count
+            # Check move count (competitive Pokemon must have exactly 4 moves)
             moves = [m for m in pkmn.get("moves", []) if m]
             if len(moves) > 4:
                 violations.append(f"{species_id} has {len(moves)} moves (max 4)")
+            if len(moves) < 4:
+                violations.append(f"{species_id} has only {len(moves)} moves (need 4)")
+
+            # Ability-species validation
+            if self.pokemon_data:
+                ability_id = _to_id(pkmn.get("ability", "") or "")
+                if ability_id:
+                    pkmn_entry = self.pokemon_data.get_pokemon(species_id)
+                    if pkmn_entry:
+                        valid_abilities = {_to_id(a) for a in pkmn_entry.get("abilities", {}).values()}
+                        if valid_abilities and ability_id not in valid_abilities:
+                            violations.append(f"Invalid ability {ability_id} on {species_id}")
 
         return len(violations) == 0, violations
 
@@ -145,6 +157,19 @@ class FormatConstraints:
         for move in pkmn.get("moves", []):
             if _to_id(move or "") in self.banned_moves:
                 return False
+
+        # Must have exactly 4 moves
+        moves = [m for m in pkmn.get("moves", []) if m]
+        if len(moves) < 4:
+            return False
+
+        # Ability-species validation
+        if self.pokemon_data and ability_id:
+            pkmn_entry = self.pokemon_data.get_pokemon(species_id)
+            if pkmn_entry:
+                valid_abilities = {_to_id(a) for a in pkmn_entry.get("abilities", {}).values()}
+                if valid_abilities and ability_id not in valid_abilities:
+                    return False
 
         return True
 

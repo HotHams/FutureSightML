@@ -4,35 +4,184 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>FutureSightML - Pokemon Team Builder</title>
+    <link rel="icon" type="image/x-icon" href="/static/icon.ico" />
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Inter:wght@300;400;500;600;700&display=swap');
-        :root { --bg-dark: #0f0f23; --bg-card: #1a1a2e; --bg-card-hover: #22223a; --accent: #e63946; --accent2: #457b9d; --gold: #f4d35e; }
-        body { background: var(--bg-dark); color: #e0e0e0; font-family: 'Inter', sans-serif; }
+        @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+        /* === RETRO COLOR SYSTEM (dual-mode) === */
+        :root {
+            --retro-bg: #e8e0c8;
+            --retro-surface: #f0ead8;
+            --retro-surface-alt: #d8d0b8;
+            --retro-border: #383830;
+            --retro-border-light: #58584e;
+            --retro-text: #181810;
+            --retro-accent: #c02820;
+            --retro-accent2: #2858a0;
+            --retro-gold: #b8960c;
+        }
+        .dark {
+            --retro-bg: #0c0c1e;
+            --retro-surface: #18182e;
+            --retro-surface-alt: #242442;
+            --retro-border: #5a5a8a;
+            --retro-border-light: #44446a;
+            --retro-text: #e8e8f0;
+            --retro-accent: #e63946;
+            --retro-accent2: #5890c8;
+            --retro-gold: #f4d35e;
+        }
+
+        /* === GLOBAL BASE === */
+        body {
+            background: var(--retro-bg);
+            color: var(--retro-text);
+            font-family: 'Press Start 2P', monospace;
+            font-size: 10px;
+            line-height: 1.8;
+        }
         .pixel-font { font-family: 'Press Start 2P', monospace; }
-        .glass { background: rgba(26, 26, 46, 0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.08); }
-        .pokemon-card { transition: all 0.2s ease; }
-        .pokemon-card:hover { transform: translateY(-4px); box-shadow: 0 8px 25px rgba(230, 57, 70, 0.15); }
-        .type-badge { padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+
+        /* === RETRO PANEL (replaces .glass) === */
+        .retro-panel {
+            background: var(--retro-surface);
+            border: 3px solid var(--retro-border);
+            box-shadow: inset -2px -2px 0 rgba(0,0,0,0.2), inset 2px 2px 0 rgba(255,255,255,0.05);
+        }
+        .retro-panel-header {
+            background: var(--retro-border);
+            color: #fff;
+            padding: 4px 8px;
+            margin: -1px -1px 8px -1px;
+            font-size: 9px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+
+        /* === POKEMON CARD === */
+        .pokemon-card { transition: none; }
+        .pokemon-card:hover { transform: translateY(-2px); box-shadow: 3px 3px 0 var(--retro-border); }
         .sprite-container { image-rendering: pixelated; }
-        .glow { box-shadow: 0 0 20px rgba(230, 57, 70, 0.3); }
-        .progress-bar { background: linear-gradient(90deg, #e63946, #457b9d); }
-        ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: #0f0f23; } ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
-        .stat-bar { height: 6px; border-radius: 3px; transition: width 0.5s ease; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        .fade-in { animation: fadeIn 0.3s ease forwards; }
-        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-        .animate-pulse { animation: pulse 2s ease-in-out infinite; }
-        .pokeball-spinner { width: 40px; height: 40px; border-radius: 50%; border: 3px solid #e63946; border-top-color: white; animation: spin 1s linear infinite; }
+
+        /* === TYPE BADGE === */
+        .type-badge {
+            padding: 2px 6px;
+            border-radius: 0;
+            font-size: 8px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border: 2px solid rgba(0,0,0,0.3);
+        }
+
+        /* === STAT BAR (HP bar look) === */
+        .stat-bar {
+            height: 8px;
+            border-radius: 0;
+            transition: width 0.3s steps(8);
+            background-image: repeating-linear-gradient(90deg, transparent, transparent 7px, rgba(0,0,0,0.2) 7px, rgba(0,0,0,0.2) 8px);
+            background-size: 100% 100%;
+        }
+
+        /* === GLOW (retro thick border) === */
+        .glow { box-shadow: none; border: 3px solid var(--retro-accent) !important; }
+
+        /* === PROGRESS BAR === */
+        .progress-bar { background: var(--retro-accent); border-radius: 0; }
+
+        /* === POKEBALL SPINNER (blinking arrow) === */
+        .pokeball-spinner {
+            width: auto !important;
+            height: auto !important;
+            border: none !important;
+            border-radius: 0 !important;
+            background: transparent !important;
+            animation: blink 0.6s steps(2) infinite !important;
+            font-family: 'Press Start 2P', monospace;
+            font-size: 14px;
+            color: var(--retro-accent);
+            display: inline-block;
+        }
+        .pokeball-spinner::after { content: '\25B6'; }
+
+        /* === SCROLLBAR === */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: var(--retro-bg); }
+        ::-webkit-scrollbar-thumb { background: var(--retro-border); border-radius: 0; }
+
+        /* === ANIMATIONS (stepped for retro feel) === */
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .fade-in { animation: fadeIn 0.2s steps(3) forwards; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+        .animate-pulse { animation: pulse 1s steps(2) infinite; }
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
         @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* === GLOBAL OVERRIDES === */
+        /* Auto-border nested panels */
+        [class*="bg-dark-700"] { border: 2px solid var(--retro-border); }
+
+        /* Retro form inputs */
+        input, textarea, select {
+            border: 2px solid var(--retro-border) !important;
+            background: var(--retro-surface-alt) !important;
+            color: var(--retro-text) !important;
+            font-family: 'Press Start 2P', monospace !important;
+            font-size: 9px !important;
+            border-radius: 0 !important;
+        }
+
+        /* Instant transitions (retro snappiness) */
+        .transition-colors, .transition-opacity { transition-duration: 0s !important; }
+
+        /* Hard pixel drop-shadow on shadow-lg elements */
+        [class*="shadow-lg"] { box-shadow: 3px 3px 0 var(--retro-border) !important; }
+
+        /* Arrow selector on active nav button */
+        nav button[class*="bg-accent"]::before { content: '\25B6 '; font-size: 8px; }
+
+        /* Buttons get retro border */
+        button { border-radius: 0; }
     </style>
     <script>
         tailwind.config = {
             darkMode: 'class',
-            theme: { extend: { colors: { dark: { 900: '#0f0f23', 800: '#1a1a2e', 700: '#22223a', 600: '#2d2d44' }, accent: '#e63946', accent2: '#457b9d', gold: '#f4d35e' } } }
+            theme: {
+                extend: {
+                    colors: {
+                        dark: {
+                            900: 'var(--retro-bg)',
+                            800: 'var(--retro-surface)',
+                            700: 'var(--retro-surface-alt)',
+                            600: 'var(--retro-border)',
+                        },
+                        accent: 'var(--retro-accent)',
+                        accent2: 'var(--retro-accent2)',
+                        gold: 'var(--retro-gold)',
+                    },
+                    borderRadius: {
+                        DEFAULT: '0px', none: '0px', sm: '0px', md: '0px',
+                        lg: '0px', xl: '0px', '2xl': '0px', full: '0px',
+                    },
+                    fontFamily: {
+                        sans: ['"Press Start 2P"', 'monospace'],
+                        mono: ['"Press Start 2P"', 'monospace'],
+                    },
+                    fontSize: {
+                        'xs': ['8px', { lineHeight: '1.8' }],
+                        'sm': ['9px', { lineHeight: '1.8' }],
+                        'base': ['10px', { lineHeight: '1.8' }],
+                        'lg': ['11px', { lineHeight: '1.8' }],
+                        'xl': ['12px', { lineHeight: '1.6' }],
+                        '2xl': ['14px', { lineHeight: '1.6' }],
+                        '3xl': ['18px', { lineHeight: '1.4' }],
+                    },
+                }
+            }
         };
     </script>
 </head>
@@ -61,7 +210,7 @@ function StatBar({ label, value, max = 255 }) {
     return (
         <div className="flex items-center gap-2 text-xs">
             <span className="w-8 text-gray-400">{label}</span>
-            <div className="flex-1 bg-dark-700 rounded-full h-1.5">
+            <div className="flex-1 bg-dark-700 h-3">
                 <div className="stat-bar" style={{ width: `${pct}%`, background: color }} />
             </div>
             <span className="w-8 text-right font-mono">{value}</span>
@@ -69,21 +218,47 @@ function StatBar({ label, value, max = 255 }) {
     );
 }
 
+function spriteId(species) {
+    let name = (species || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const suffixes = [
+        'alola','galar','hisui','paldea',
+        'megax','megay','mega',
+        'primal','origin','therian','incarnate',
+        'ice','shadow','rapid','single','crowned',
+        'heat','wash','frost','fan','mow',
+        'sky','land','trash','sandy',
+        'attack','defense','speed',
+        'bloodmoon','wellspring','hearthflame','cornerstone',
+        'stellar','terastal',
+        'bug','dark','dragon','electric','fairy','fighting','fire',
+        'flying','ghost','grass','ground','poison',
+        'psychic','rock','steel','water',
+    ];
+    for (const s of suffixes) {
+        if (name.endsWith(s) && name.length > s.length) {
+            name = name.slice(0, -s.length) + '-' + s;
+            break;
+        }
+    }
+    return name;
+}
+
 function PokemonSprite({ species, size = 96, animated = false }) {
-    const name = (species || '').toLowerCase().replace(/[^a-z0-9-]/g, '');
-    const [src, setSrc] = useState('');
+    const name = spriteId(species);
+    const spriteUrl = (n, anim) => anim
+        ? `https://play.pokemonshowdown.com/sprites/ani/${n}.gif`
+        : `https://play.pokemonshowdown.com/sprites/gen5/${n}.png`;
+    const [src, setSrc] = useState(() => name ? spriteUrl(name, animated) : '');
     const [error, setError] = useState(false);
 
     useEffect(() => {
-        setError(false);
-        if (animated) {
-            setSrc(`https://play.pokemonshowdown.com/sprites/ani/${name}.gif`);
-        } else {
-            setSrc(`https://play.pokemonshowdown.com/sprites/gen5/${name}.png`);
+        if (name) {
+            setError(false);
+            setSrc(spriteUrl(name, animated));
         }
     }, [name, animated]);
 
-    if (error || !name) {
+    if (error || !name || !src) {
         return <div className="flex items-center justify-center bg-dark-700 rounded-lg" style={{ width: size, height: size }}>
             <span className="text-2xl">?</span>
         </div>;
@@ -92,7 +267,8 @@ function PokemonSprite({ species, size = 96, animated = false }) {
     return <img src={src} alt={species} className="sprite-container"
                 style={{ width: size, height: size, objectFit: 'contain' }}
                 onError={() => {
-                    if (animated) setSrc(`https://play.pokemonshowdown.com/sprites/gen5/${name}.png`);
+                    if (src.includes('/ani/')) setSrc(`https://play.pokemonshowdown.com/sprites/gen5/${name}.png`);
+                    else if (src.includes('/gen5/')) setSrc(`https://play.pokemonshowdown.com/sprites/ani/${name}.gif`);
                     else setError(true);
                 }} />;
 }
@@ -101,7 +277,7 @@ function PokemonCard({ pokemon, onClick, selected, compact }) {
     if (compact) {
         return (
             <div onClick={onClick}
-                 className={`pokemon-card flex items-center gap-3 p-2 rounded-lg cursor-pointer ${selected ? 'glass glow' : 'bg-dark-700 hover:bg-dark-600'}`}>
+                 className={`pokemon-card flex items-center gap-3 p-2 rounded-lg cursor-pointer ${selected ? 'retro-panel glow' : 'bg-dark-700 hover:bg-dark-600'}`}>
                 <PokemonSprite species={pokemon.species} size={40} />
                 <div className="flex-1 min-w-0">
                     <div className="font-semibold text-sm truncate">{pokemon.species || pokemon.name}</div>
@@ -115,7 +291,7 @@ function PokemonCard({ pokemon, onClick, selected, compact }) {
 
     return (
         <div onClick={onClick}
-             className={`pokemon-card glass rounded-xl p-4 cursor-pointer ${selected ? 'glow border-accent' : ''}`}>
+             className={`pokemon-card retro-panel rounded-xl p-4 cursor-pointer ${selected ? 'glow border-accent' : ''}`}>
             <div className="flex items-center gap-3 mb-3">
                 <PokemonSprite species={pokemon.species} size={64} animated />
                 <div>
@@ -173,35 +349,37 @@ function formatIVs(ivs) {
     return parts.length > 0 ? parts.join(' / ') : null;
 }
 
-function TeamSlot({ pokemon, index, onRemove }) {
+function TeamSlot({ pokemon, index, onRemove, gen }) {
     if (!pokemon) {
         return (
-            <div className="glass rounded-xl p-4 flex items-center justify-center h-28 border-2 border-dashed border-dark-600">
+            <div className="retro-panel rounded-xl p-4 flex items-center justify-center h-28 border-2 border-dashed border-dark-600">
                 <span className="text-gray-500 text-sm">Slot {index + 1}</span>
             </div>
         );
     }
 
-    const evStr = formatEVs(pokemon.evs);
-    const ivStr = formatIVs(pokemon.ivs);
+    const g = gen || 9;
+    const evStr = g >= 3 ? formatEVs(pokemon.evs) : null;
+    const ivStr = g >= 3 ? formatIVs(pokemon.ivs) : null;
 
     return (
-        <div className="glass rounded-xl p-3 relative group fade-in">
+        <div className="retro-panel rounded-xl p-3 relative group fade-in">
             <button onClick={() => onRemove(index)}
-                    className="absolute -top-2 -right-2 w-6 h-6 bg-red-600 rounded-full text-xs font-bold opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                    className="absolute -top-2 -right-2 w-6 h-6 bg-red-600 border-2 border-red-900 text-xs font-bold opacity-0 group-hover:opacity-100 flex items-center justify-center">
                 X
             </button>
             <div className="flex items-center gap-2">
                 <PokemonSprite species={pokemon.species} size={48} animated />
                 <div className="flex-1 min-w-0">
                     <div className="font-semibold text-sm truncate">{pokemon.species}</div>
-                    {pokemon.item && <div className="text-xs text-gray-400 truncate">@ {pokemon.item}</div>}
-                    {pokemon.ability && <div className="text-xs text-gray-500 truncate">{pokemon.ability}</div>}
+                    {g >= 2 && pokemon.item && <div className="text-xs text-gray-400 truncate">@ {pokemon.item}</div>}
+                    {g >= 3 && pokemon.ability && <div className="text-xs text-gray-500 truncate">{pokemon.ability}</div>}
                 </div>
             </div>
-            {pokemon.nature && <div className="text-[10px] text-accent mt-1">{pokemon.nature} Nature</div>}
+            {g >= 3 && pokemon.nature && <div className="text-[10px] text-accent mt-1">{pokemon.nature} Nature</div>}
             {evStr && <div className="text-[10px] text-gray-400 mt-0.5">EVs: {evStr}</div>}
             {ivStr && <div className="text-[10px] text-yellow-400/70 mt-0.5">IVs: {ivStr}</div>}
+            {g >= 9 && pokemon.tera_type && <div className="text-[10px] text-purple-400 mt-0.5">Tera: {pokemon.tera_type}</div>}
             {pokemon.moves && (
                 <div className="grid grid-cols-2 gap-0.5 mt-2">
                     {pokemon.moves.map((m, i) => (
@@ -213,7 +391,7 @@ function TeamSlot({ pokemon, index, onRemove }) {
     );
 }
 
-function GeneratePanel({ format, onTeamGenerated }) {
+function GeneratePanel({ format, onTeamGenerated, onError }) {
     const [loading, setLoading] = useState(false);
     const [progress, setProgress] = useState('');
     const [settings, setSettings] = useState({ population: 100, generations: 80, n_results: 5 });
@@ -227,21 +405,27 @@ function GeneratePanel({ format, onTeamGenerated }) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ format_id: format, ...settings }),
             });
-            if (!res.ok) throw new Error(await res.text());
+            if (!res.ok) {
+                const errText = await res.text();
+                let errMsg = errText;
+                try { errMsg = JSON.parse(errText).detail || errText; } catch {}
+                throw new Error(errMsg);
+            }
             const data = await res.json();
             onTeamGenerated(data.teams);
             setProgress(`Generated ${data.teams.length} teams!`);
         } catch (e) {
             setProgress(`Error: ${e.message}`);
+            if (onError) onError(e.message);
         }
         setLoading(false);
     }
 
     return (
-        <div className="glass rounded-xl p-4">
-            <h3 className="font-bold text-lg mb-1 flex items-center gap-2">
+        <div className="retro-panel rounded-xl p-4">
+            <div className="retro-panel-header flex items-center gap-2">
                 <span className="text-accent">AI</span> Team Generator
-            </h3>
+            </div>
             <p className="text-[10px] text-gray-500 mb-3">Uses a genetic algorithm to evolve teams that maximize predicted win rate against the current metagame.</p>
             <div className="grid grid-cols-3 gap-3 mb-3">
                 <div>
@@ -311,7 +495,7 @@ function ImportExportPanel({ team, format, onImport }) {
     }
 
     return (
-        <div className="glass rounded-xl p-4">
+        <div className="retro-panel rounded-xl p-4">
             <div className="flex gap-2 mb-3">
                 <button onClick={() => setMode('import')}
                         className={`px-3 py-1 rounded text-sm font-semibold ${mode === 'import' ? 'bg-accent text-white' : 'bg-dark-700 text-gray-400'}`}>Import</button>
@@ -341,7 +525,7 @@ function ImportExportPanel({ team, format, onImport }) {
     );
 }
 
-function EvaluationPanel({ team, format }) {
+function EvaluationPanel({ team, format, onEvaluated }) {
     const [evaluation, setEvaluation] = useState(null);
     const [loading, setLoading] = useState(false);
 
@@ -356,6 +540,7 @@ function EvaluationPanel({ team, format }) {
             });
             const data = await res.json();
             setEvaluation(data);
+            if (onEvaluated) onEvaluated(data.overall_winrate);
         } catch (e) {
             console.error(e);
         }
@@ -373,7 +558,7 @@ function EvaluationPanel({ team, format }) {
     const wrColor = wr >= 55 ? 'text-green-400' : wr >= 45 ? 'text-yellow-400' : 'text-red-400';
 
     return (
-        <div className="glass rounded-xl p-4 fade-in">
+        <div className="retro-panel rounded-xl p-4 fade-in">
             <h3 className="font-bold mb-2">Team Evaluation</h3>
             <div className="text-center mb-3">
                 <div className={`text-3xl font-bold ${wrColor}`}>{wr}%</div>
@@ -382,8 +567,8 @@ function EvaluationPanel({ team, format }) {
             <div className="flex justify-between text-xs text-gray-400 mb-2">
                 <span>Favorable: {evaluation.matchups_above_50}/{evaluation.total_matchups}</span>
             </div>
-            <div className="w-full bg-dark-700 rounded-full h-2 mb-3">
-                <div className="progress-bar h-2 rounded-full" style={{ width: `${wr}%` }} />
+            <div className="w-full bg-dark-700 h-3 mb-3">
+                <div className="progress-bar h-3" style={{ width: `${wr}%` }} />
             </div>
             {evaluation.worst_matchups && evaluation.worst_matchups.length > 0 && (
                 <div className="mt-2">
@@ -400,42 +585,64 @@ function EvaluationPanel({ team, format }) {
     );
 }
 
-function AnalysisPanel({ team, format }) {
+function AnalysisPanel({ team, format, autoRun, onAnalysisResult }) {
     const [analysis, setAnalysis] = useState(null);
     const [loading, setLoading] = useState(false);
     const [expanded, setExpanded] = useState(false);
+    const [error, setError] = useState(null);
+    const panelRef = useRef(null);
+    const hasAutoRun = useRef(false);
 
     async function runAnalysis() {
         if (team.filter(Boolean).length === 0) return;
         setLoading(true);
+        setError(null);
         try {
             const res = await fetch(`${API}/team/analyze/full`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ format_id: format, team: team.filter(Boolean) }),
             });
+            if (!res.ok) throw new Error(`Analysis failed (${res.status})`);
             const data = await res.json();
             setAnalysis(data);
             setExpanded(true);
-        } catch (e) { console.error(e); }
+            if (onAnalysisResult) onAnalysisResult(data);
+            setTimeout(() => {
+                if (panelRef.current) panelRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }, 100);
+        } catch (e) {
+            console.error(e);
+            setError(e.message);
+        }
         setLoading(false);
     }
 
+    // Auto-run analysis when triggered by team generation
+    useEffect(() => {
+        if (autoRun && team.filter(Boolean).length > 0 && !hasAutoRun.current) {
+            hasAutoRun.current = true;
+            runAnalysis();
+        }
+        if (!autoRun) hasAutoRun.current = false;
+    }, [autoRun, team]);
+
     return (
-        <div className="glass rounded-xl p-4">
+        <div ref={panelRef} className={`retro-panel rounded-xl p-4 ${analysis ? 'border-accent2' : ''}`}>
             <button onClick={runAnalysis} disabled={loading || team.filter(Boolean).length === 0}
                     className="w-full bg-accent2 hover:bg-blue-700 disabled:bg-gray-600 text-white font-bold py-2 rounded-lg text-sm flex items-center justify-center gap-2">
                 {loading ? <><div className="pokeball-spinner" style={{width:16,height:16,borderWidth:2}} /> Analyzing...</>
                          : 'Deep Analysis'}
             </button>
             <p className="text-[9px] text-gray-500 mt-1.5 text-center">Runs archetype detection, speed tiers, type coverage, tera optimization, threat analysis, and team strategy breakdown.</p>
+            {error && <p className="text-xs text-red-400 mt-2 text-center">{error}</p>}
 
             {analysis && expanded && (
                 <div className="mt-3 space-y-3 fade-in">
 
                     {/* Strategy Summary */}
                     {analysis.strategy && analysis.strategy.summary && (
-                        <div className="bg-gradient-to-br from-dark-700 to-dark-800 rounded-lg p-3 border border-accent/20">
+                        <div className="bg-dark-700 rounded-lg p-3 border border-accent/20">
                             <div className="text-xs text-accent font-bold mb-1.5">Team Strategy</div>
                             <p className="text-xs text-gray-300 leading-relaxed">{analysis.strategy.summary}</p>
                         </div>
@@ -663,12 +870,12 @@ function MetaPage({ format }) {
 
     return (
         <div className="space-y-6 fade-in">
-            <div className="glass rounded-xl p-4">
+            <div className="retro-panel rounded-xl p-4">
                 <h3 className="font-bold text-lg mb-1">Metagame Overview</h3>
                 <div className="text-sm text-gray-400">{meta.pool_size} Pokemon sets | {meta.total_meta_teams} meta teams</div>
             </div>
 
-            <div className="glass rounded-xl p-4">
+            <div className="retro-panel rounded-xl p-4">
                 <h3 className="font-bold mb-3">Top Pokemon</h3>
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
                     {meta.top_pokemon.slice(0, 20).map((p, i) => (
@@ -684,7 +891,7 @@ function MetaPage({ format }) {
                 </div>
             </div>
 
-            <div className="glass rounded-xl p-4">
+            <div className="retro-panel rounded-xl p-4">
                 <h3 className="font-bold mb-3">Sample Meta Teams</h3>
                 <div className="space-y-3">
                     {meta.meta_teams.map((team, i) => (
@@ -704,11 +911,93 @@ function MetaPage({ format }) {
     );
 }
 
+function SavedTeamsPanel({ format, onLoad, version }) {
+    const [saved, setSaved] = useState([]);
+    const [expanded, setExpanded] = useState(false);
+
+    useEffect(() => {
+        loadSaved();
+    }, [format, version]);
+
+    function loadSaved() {
+        try {
+            const all = JSON.parse(localStorage.getItem('fsml-saved-teams') || '[]');
+            setSaved(all.filter(s => s.format === format));
+        } catch { setSaved([]); }
+    }
+
+    function deleteTeam(id) {
+        try {
+            const all = JSON.parse(localStorage.getItem('fsml-saved-teams') || '[]');
+            const filtered = all.filter(s => s.id !== id);
+            localStorage.setItem('fsml-saved-teams', JSON.stringify(filtered));
+            setSaved(filtered.filter(s => s.format === format));
+        } catch {}
+    }
+
+    function renameTeam(id, newName) {
+        try {
+            const all = JSON.parse(localStorage.getItem('fsml-saved-teams') || '[]');
+            const entry = all.find(s => s.id === id);
+            if (entry) entry.name = newName;
+            localStorage.setItem('fsml-saved-teams', JSON.stringify(all));
+            setSaved(all.filter(s => s.format === format));
+        } catch {}
+    }
+
+    if (saved.length === 0) return null;
+
+    return (
+        <div className="retro-panel rounded-xl p-4">
+            <div className="flex items-center justify-between cursor-pointer" onClick={() => setExpanded(!expanded)}>
+                <h3 className="font-bold">Saved Teams ({saved.length})</h3>
+                <span className="text-xs text-gray-400">{expanded ? '[-]' : '[+]'}</span>
+            </div>
+            {expanded && (
+                <div className="space-y-2 mt-3">
+                    {saved.map(s => (
+                        <div key={s.id} className="bg-dark-700 rounded-lg p-2">
+                            <div className="flex items-center justify-between mb-1.5">
+                                <input
+                                    className="text-sm font-semibold bg-transparent border-none outline-none flex-1 min-w-0 truncate"
+                                    defaultValue={s.name}
+                                    onBlur={e => { if (e.target.value !== s.name) renameTeam(s.id, e.target.value); }}
+                                    onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
+                                    style={{ padding: 0 }}
+                                />
+                                <div className="flex gap-1 ml-2 flex-shrink-0">
+                                    <button onClick={() => onLoad(s.pokemon)}
+                                            className="text-[9px] px-2 py-0.5 bg-accent2 text-white font-bold hover:bg-blue-700">
+                                        LOAD
+                                    </button>
+                                    <button onClick={() => deleteTeam(s.id)}
+                                            className="text-[9px] px-2 py-0.5 bg-red-800 text-white font-bold hover:bg-red-600">
+                                        DEL
+                                    </button>
+                                </div>
+                            </div>
+                            <div className="flex gap-1 items-center">
+                                <span className={`text-[10px] font-bold mr-1 ${s.winrate >= 70 ? 'text-green-400' : s.winrate >= 50 ? 'text-yellow-400' : 'text-red-400'}`}>
+                                    {s.winrate ? s.winrate + '%' : ''}
+                                </span>
+                                {s.pokemon.map((p, j) => (
+                                    <PokemonSprite key={j} species={p.species} size={28} />
+                                ))}
+                            </div>
+                            <div className="text-[9px] text-gray-500 mt-1">{s.date}</div>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
 function GeneratedTeams({ teams, onSelect }) {
     if (!teams || teams.length === 0) return null;
 
     return (
-        <div className="glass rounded-xl p-4">
+        <div className="retro-panel rounded-xl p-4">
             <h3 className="font-bold mb-3">Generated Teams</h3>
             <div className="space-y-3">
                 {teams.map((team, i) => (
@@ -736,6 +1025,30 @@ function GeneratedTeams({ teams, onSelect }) {
     );
 }
 
+function prettyName(fmtId) {
+    const m = fmtId.match(/^gen(\d+)(.*)/);
+    if (!m) return fmtId;
+    const tier = m[2];
+    const special = {
+        'ou': 'OU', 'uu': 'UU', 'ru': 'RU', 'nu': 'NU', 'pu': 'PU',
+        'ubers': 'Ubers', 'doublesou': 'Doubles OU', 'lc': 'LC',
+        'monotype': 'Monotype', 'nationaldex': 'National Dex',
+        'nationaldexou': 'National Dex OU', 'nationaldexubers': 'National Dex Ubers',
+        'randombattle': 'Random Battle', 'anythinggoes': 'Anything Goes',
+        'cap': 'CAP', 'zu': 'ZU', 'nfe': 'NFE', 'battlestadiumsingles': 'BSS',
+        'battlestadiumdoubles': 'BSD', '1v1': '1v1', '2v2doubles': '2v2',
+        'almostanyability': 'AAA', 'balancedhackmons': 'BH',
+        'mixandmega': 'Mix and Mega', 'stabmons': 'STABmons',
+    };
+    if (special[tier]) return special[tier];
+    // VGC: gen9vgc2026regf -> VGC 2026 Reg F
+    const vgcMatch = tier.match(/^vgc(\d+)reg([a-z])$/);
+    if (vgcMatch) return `VGC ${vgcMatch[1]} Reg ${vgcMatch[2].toUpperCase()}`;
+    const vgcMatch2 = tier.match(/^vgc(\d+)$/);
+    if (vgcMatch2) return `VGC ${vgcMatch2[1]}`;
+    return tier.toUpperCase();
+}
+
 function App() {
     const [page, setPage] = useState('builder');
     const [format, setFormat] = useState('gen9ou');
@@ -745,6 +1058,19 @@ function App() {
     const [searchQuery, setSearchQuery] = useState('');
     const [searchResults, setSearchResults] = useState([]);
     const [searching, setSearching] = useState(false);
+    const [autoAnalyze, setAutoAnalyze] = useState(false);
+    const [notification, setNotification] = useState(null);
+    const [darkMode, setDarkMode] = useState(() => {
+        const saved = localStorage.getItem('retro-dark-mode');
+        return saved !== null ? saved === 'true' : true;
+    });
+
+    const gen = parseInt((format || '').match(/gen(\d)/)?.[1] || '9');
+
+    useEffect(() => {
+        document.documentElement.classList.toggle('dark', darkMode);
+        localStorage.setItem('retro-dark-mode', String(darkMode));
+    }, [darkMode]);
 
     useEffect(() => {
         fetch(`${API}/formats`).then(r => r.json()).then(d => setFormats(d.formats || [])).catch(() => {});
@@ -767,10 +1093,11 @@ function App() {
     }
 
     function addToTeam(pokemon) {
+        const p = { ...pokemon, species: pokemon.species || pokemon.name || pokemon.id };
         setTeam(prev => {
             const next = [...prev];
             const emptyIdx = next.findIndex(s => s === null);
-            if (emptyIdx >= 0) next[emptyIdx] = pokemon;
+            if (emptyIdx >= 0) next[emptyIdx] = p;
             return next;
         });
     }
@@ -779,10 +1106,16 @@ function App() {
         setTeam(prev => { const next = [...prev]; next[idx] = null; return next; });
     }
 
+    function handleTeamsGenerated(teams) {
+        setGeneratedTeams(teams);
+        // Don't auto-select — left column stays blank until user picks a team
+    }
+
     function selectGeneratedTeam(pokemon) {
         const newTeam = [...pokemon.slice(0, 6)];
         while (newTeam.length < 6) newTeam.push(null);
         setTeam(newTeam);
+        setAutoAnalyze(true);
     }
 
     function handleImport(importedTeam) {
@@ -791,15 +1124,56 @@ function App() {
         setTeam(newTeam);
     }
 
+    function handleAnalysisResult(data) {
+        setAutoAnalyze(false);
+    }
+
+    const [savedVersion, setSavedVersion] = useState(0);
+    const [lastWinrate, setLastWinrate] = useState(null);
+
+    function saveCurrentTeam() {
+        const filled = team.filter(Boolean);
+        if (filled.length === 0) return;
+        try {
+            const all = JSON.parse(localStorage.getItem('fsml-saved-teams') || '[]');
+            const species = filled.map(p => p.species);
+            const entry = {
+                id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+                format: format,
+                name: species.slice(0, 3).join(' / '),
+                pokemon: filled,
+                winrate: lastWinrate,
+                date: new Date().toLocaleDateString(),
+            };
+            all.unshift(entry);
+            localStorage.setItem('fsml-saved-teams', JSON.stringify(all));
+            showNotification('Team saved!', 'success');
+            setSavedVersion(v => v + 1);
+        } catch (e) {
+            showNotification('Failed to save: ' + e.message, 'error');
+        }
+    }
+
+    function loadSavedTeam(pokemon) {
+        const newTeam = [...pokemon.slice(0, 6)];
+        while (newTeam.length < 6) newTeam.push(null);
+        setTeam(newTeam);
+    }
+
+    function showNotification(msg, type = 'error') {
+        setNotification({ msg, type });
+        setTimeout(() => setNotification(null), 5000);
+    }
+
     const filledTeam = team.filter(Boolean);
 
     return (
         <div className="min-h-screen">
             {/* Header */}
-            <header className="glass sticky top-0 z-50">
+            <header className="retro-panel sticky top-0 z-50">
                 <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 bg-accent rounded-full flex items-center justify-center">
+                        <div className="w-8 h-8 bg-accent flex items-center justify-center border-2 border-current">
                             <span className="text-white font-bold text-sm">F</span>
                         </div>
                         <h1 className="pixel-font text-sm text-white">FutureSight<span className="text-accent">ML</span></h1>
@@ -814,36 +1188,72 @@ function App() {
                             Meta Analysis
                         </button>
                         <select value={format} onChange={e => setFormat(e.target.value)}
-                                className="bg-dark-700 text-sm rounded px-2 py-1 text-gray-200">
-                            {formats.map(f => (
-                                <option key={f.id} value={f.id}>{f.id} {f.has_model ? '' : '(no model)'}</option>
-                            ))}
+                                className="bg-dark-700 text-sm rounded px-3 py-2 text-gray-200 border border-gray-600 cursor-pointer appearance-auto"
+                                style={{minWidth: '200px', position: 'relative', zIndex: 100}}>
+                            {(() => {
+                                const grouped = {};
+                                formats.forEach(f => {
+                                    const g = (f.id.match(/gen(\d)/)?.[1]) || '?';
+                                    if (!grouped[g]) grouped[g] = [];
+                                    grouped[g].push(f);
+                                });
+                                return Object.entries(grouped).sort(([a],[b]) => +a - +b).map(([g, fmts]) => (
+                                    <optgroup key={g} label={`Generation ${g}`}>
+                                        {fmts.map(f => (
+                                            <option key={f.id} value={f.id}>{prettyName(f.id)}{f.has_model ? '' : ' (no model)'}</option>
+                                        ))}
+                                    </optgroup>
+                                ));
+                            })()}
                         </select>
+                        <button onClick={() => setDarkMode(!darkMode)}
+                                className="retro-panel px-2 py-1 text-[8px]">
+                            {darkMode ? '\u25B6 DAY' : '\u25B6 NIGHT'}
+                        </button>
                     </nav>
                 </div>
             </header>
+
+            {/* Notification toast */}
+            {notification && (
+                <div className={`fixed top-20 right-4 z-50 px-4 py-2 rounded-lg text-sm font-semibold shadow-lg fade-in ${notification.type === 'error' ? 'bg-red-600 text-white' : 'bg-green-600 text-white'}`}>
+                    {notification.msg}
+                </div>
+            )}
 
             <main className="max-w-7xl mx-auto px-4 py-6">
                 {page === 'builder' && (
                     <div className="grid grid-cols-12 gap-4">
                         {/* Left: Team Slots */}
                         <div className="col-span-12 lg:col-span-3 space-y-3">
-                            <h2 className="font-bold text-lg mb-2">Your Team ({filledTeam.length}/6)</h2>
-                            <div className="space-y-2">
-                                {team.map((p, i) => <TeamSlot key={i} pokemon={p} index={i} onRemove={removeFromTeam} />)}
+                            <div className="flex items-center justify-between mb-2">
+                                <h2 className="font-bold text-lg">Your Team ({filledTeam.length}/6)</h2>
+                                {filledTeam.length > 0 && (
+                                    <button onClick={saveCurrentTeam}
+                                            className="text-[10px] px-3 py-1 bg-gold text-black font-bold hover:bg-yellow-400 border-2 border-yellow-700">
+                                        SAVE
+                                    </button>
+                                )}
                             </div>
-                            {filledTeam.length > 0 && <EvaluationPanel team={filledTeam} format={format} />}
-                            {filledTeam.length > 0 && <AnalysisPanel team={filledTeam} format={format} />}
+
+                            <div className="space-y-2">
+                                {team.map((p, i) => <TeamSlot key={i} pokemon={p} index={i} onRemove={removeFromTeam} gen={gen} />)}
+                            </div>
+                            {filledTeam.length > 0 && <EvaluationPanel team={filledTeam} format={format} onEvaluated={setLastWinrate} />}
+                            {filledTeam.length > 0 && (
+                                <AnalysisPanel team={filledTeam} format={format} autoRun={autoAnalyze} onAnalysisResult={handleAnalysisResult} />
+                            )}
+                            <SavedTeamsPanel format={format} onLoad={loadSavedTeam} version={savedVersion} />
                             <ImportExportPanel team={filledTeam} format={format} onImport={handleImport} />
                         </div>
 
                         {/* Center: Search & Generate */}
                         <div className="col-span-12 lg:col-span-6 space-y-4">
-                            <GeneratePanel format={format} onTeamGenerated={setGeneratedTeams} />
+                            <GeneratePanel format={format} onTeamGenerated={handleTeamsGenerated} onError={(msg) => showNotification(msg)} />
                             <GeneratedTeams teams={generatedTeams} onSelect={selectGeneratedTeam} />
 
                             {/* Pokemon Search */}
-                            <div className="glass rounded-xl p-4">
+                            <div className="retro-panel rounded-xl p-4">
                                 <h3 className="font-bold mb-3">Search Pokemon</h3>
                                 <input type="text" value={searchQuery} onChange={e => handleSearch(e.target.value)}
                                        placeholder="Search by name..."
@@ -859,7 +1269,7 @@ function App() {
 
                         {/* Right: Pool / Info */}
                         <div className="col-span-12 lg:col-span-3 space-y-4">
-                            <div className="glass rounded-xl p-4">
+                            <div className="retro-panel rounded-xl p-4">
                                 <h3 className="font-bold mb-2">Format Info</h3>
                                 <div className="text-sm text-gray-400 space-y-1">
                                     <div>Format: <span className="text-white">{format}</span></div>

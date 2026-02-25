@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from ..data.database import Database
+from ..data.pokemon_data import PokemonDataLoader
 from ..scraper.stats_scraper import StatsScraper
 
 log = logging.getLogger("showdown.teambuilder.meta_analysis")
@@ -24,9 +25,92 @@ class MetaAnalyzer:
     representative of what you'll actually face on the ladder.
     """
 
-    def __init__(self, db: Database):
+    def __init__(self, db: Database, pokemon_data: PokemonDataLoader | None = None, gen: int = 9):
         self.db = db
+        self.pokemon_data = pokemon_data
+        self.gen = gen
         self.stats_scraper = StatsScraper(db)
+
+    def _validate_ability(self, species_id: str, ability: str | None) -> str | None:
+        """Validate that an ability belongs to the species; return corrected ability."""
+        if not self.pokemon_data:
+            return ability
+        pkmn_entry = self.pokemon_data.get_pokemon(species_id)
+        if not pkmn_entry:
+            return ability
+        valid_abilities = {_to_id(a) for a in pkmn_entry.get("abilities", {}).values()}
+        if not valid_abilities:
+            return ability
+        if ability and _to_id(ability) in valid_abilities:
+            return ability
+        # Fall back to first valid ability
+        return list(pkmn_entry.get("abilities", {}).values())[0]
+
+    def _pad_moveset(
+        self, species_id: str, moveset: list[str], target: int = 4, gen: int = 9
+    ) -> list[str]:
+        """Pad a moveset to `target` moves using type-appropriate filler.
+
+        Respects generation boundaries and per-Pokemon learnability:
+        - Only considers moves that existed in the given gen
+        - For Gen 3+, validates learnability via Showdown learnset data
+        - Prefers STAB damaging moves the Pokemon can actually learn
+
+        Priority:
+        1. Moves already in the list (no-op if >= target)
+        2. Learnable STAB damaging moves for the species' types
+        3. Common competitive utility moves legal in this gen
+        """
+        if len(moveset) >= target:
+            return moveset[:target]
+
+        moveset = list(moveset)  # don't mutate caller's list
+        used = {_to_id(m) for m in moveset}
+
+        # Try STAB damaging moves from the move database
+        if self.pokemon_data:
+            pkmn_entry = self.pokemon_data.get_pokemon(species_id)
+            types = pkmn_entry.get("types", []) if pkmn_entry else []
+
+            # Collect candidate moves: must exist in gen AND be learnable
+            type_moves = []
+            for move_id, move_data in self.pokemon_data.moves.items():
+                if move_id in used:
+                    continue
+                if not self.pokemon_data.move_exists_in_gen(move_id, gen):
+                    continue
+                if not self.pokemon_data.can_learn_move(species_id, move_id, gen):
+                    continue
+                if move_data.get("category") in ("Physical", "Special"):
+                    bp = move_data.get("basePower", 0) or 0
+                    mtype = move_data.get("type", "")
+                    stab = 1 if mtype in types else 0
+                    type_moves.append((move_id, stab, bp))
+            # Sort: STAB first, then highest base power
+            type_moves.sort(key=lambda x: (x[1], x[2]), reverse=True)
+            for mid, _, _ in type_moves:
+                if mid not in used:
+                    moveset.append(mid)
+                    used.add(mid)
+                if len(moveset) >= target:
+                    return moveset[:target]
+
+        # Last resort: generic utility moves (filtered by gen)
+        fillers = [
+            "protect", "toxic", "rest", "substitute", "return",
+            "bodyslam", "thunderwave", "icebeam", "earthquake", "surf",
+            "psychic", "flamethrower", "thunderbolt", "shadowball", "swordsdance",
+        ]
+        for f in fillers:
+            if f not in used:
+                if self.pokemon_data and not self.pokemon_data.move_exists_in_gen(f, gen):
+                    continue
+                moveset.append(f)
+                used.add(f)
+            if len(moveset) >= target:
+                break
+
+        return moveset[:target]
 
     async def build_meta_teams(
         self,
@@ -152,9 +236,13 @@ class MetaAnalyzer:
     def _build_pokemon_set(self, species: str, data: dict) -> dict:
         """Build a single Pokemon set from usage statistics (most popular)."""
         sets = self.build_pokemon_sets(species, data, max_sets=1)
-        return sets[0] if sets else {
-            "species": species, "ability": None, "item": None,
-            "moves": [], "nature": None, "tera_type": None,
+        if sets:
+            return sets[0]
+        # Fallback: pad with type-appropriate moves
+        return {
+            "species": species, "ability": self._validate_ability(species, None),
+            "item": None, "moves": self._pad_moveset(species, [], gen=self.gen),
+            "nature": None, "tera_type": None,
         }
 
     @staticmethod
@@ -204,8 +292,8 @@ class MetaAnalyzer:
         seen_keys = set()
 
         # Primary set: top item + top ability + top 4 moves + top spread
-        primary_moveset = [m for m, _ in top_moves[:4]]
-        primary_ability = top_abilities[0][0] if top_abilities else None
+        primary_moveset = self._pad_moveset(species, [m for m, _ in top_moves[:4]], gen=self.gen)
+        primary_ability = self._validate_ability(species, top_abilities[0][0] if top_abilities else None)
         primary_item = top_items[0][0] if top_items else None
         sets.append({
             "species": species,
@@ -229,7 +317,7 @@ class MetaAnalyzer:
                 if spread_idx >= 0 and top_spreads
                 else (nature, evs)
             )
-            ability = top_abilities[0][0] if top_abilities else None
+            ability = self._validate_ability(species, top_abilities[0][0] if top_abilities else None)
             moveset = primary_moveset[:]
             key = (ability, item, tuple(sorted(moveset)))
             if key in seen_keys:
@@ -247,7 +335,7 @@ class MetaAnalyzer:
 
         # Alternate moveset variant (moves 3-6)
         if len(top_moves) > 4 and len(sets) < max_sets:
-            alt_moves = [m for m, _ in top_moves[2:6]]
+            alt_moves = self._pad_moveset(species, [m for m, _ in top_moves[2:6]], gen=self.gen)
             ability = primary_ability
             item = primary_item
             key = (ability, item, tuple(sorted(alt_moves)))
@@ -265,7 +353,7 @@ class MetaAnalyzer:
 
         # Alternate ability variant
         if len(top_abilities) > 1 and len(sets) < max_sets:
-            alt_ability = top_abilities[1][0]
+            alt_ability = self._validate_ability(species, top_abilities[1][0])
             key = (alt_ability, primary_item, tuple(sorted(primary_moveset)))
             if key not in seen_keys:
                 seen_keys.add(key)
@@ -279,9 +367,11 @@ class MetaAnalyzer:
                     "tera_type": None,
                 })
 
+        fallback_ability = self._validate_ability(species, None)
+        fallback_moves = self._pad_moveset(species, [m for m, _ in top_moves[:4]], gen=self.gen)
         return sets if sets else [{
-            "species": species, "ability": None, "item": None,
-            "moves": [m for m, _ in top_moves[:4]], "nature": nature,
+            "species": species, "ability": fallback_ability, "item": None,
+            "moves": fallback_moves, "nature": nature,
             "evs": evs, "tera_type": None,
         }]
 
@@ -291,6 +381,7 @@ class MetaAnalyzer:
         """Build a rich pool of Pokemon sets from usage data.
 
         Returns hundreds of distinct (species, moveset, item, ability) combinations.
+        All sets are guaranteed to have 4 moves.
         """
         sorted_pokemon = sorted(
             usage.items(),
@@ -302,6 +393,12 @@ class MetaAnalyzer:
         for species_id, data in sorted_pokemon:
             sets = self.build_pokemon_sets(species_id, data, max_sets=sets_per_pokemon)
             pool.extend(sets)
+
+        # Enforce 4-move minimum
+        before = len(pool)
+        pool = [p for p in pool if len([m for m in p.get("moves", []) if m]) >= 4]
+        if before != len(pool):
+            log.info("Dropped %d sets with <4 moves from usage pool", before - len(pool))
 
         log.info(
             "Built Pokemon pool: %d sets across %d species",
@@ -396,10 +493,19 @@ class MetaAnalyzer:
 
         # Take top N species by usage
         top_species = species_count.most_common(top_n)
+
+        # Frequency-based filtering: remove extreme outliers (<1% of median)
+        if top_species:
+            counts = [c for _, c in top_species]
+            median_count = sorted(counts)[len(counts) // 2]
+            min_count = max(1, int(median_count * 0.01))
+            top_species = [(sp, c) for sp, c in top_species if c >= min_count]
+
         pool = []
 
         for sp_id, count in top_species:
-            top_moves_list = [m for m, _ in species_moves[sp_id].most_common(10)]
+            all_moves_for_species = [m for m, _ in species_moves[sp_id].most_common(20)]
+            top_moves_list = all_moves_for_species[:10]
             top_items_list = [it for it, _ in species_items[sp_id].most_common(4)]
             top_abilities_list = [ab for ab, _ in species_abilities[sp_id].most_common(3)]
 
@@ -411,7 +517,20 @@ class MetaAnalyzer:
                 for ability in (top_abilities_list or [None]):
                     if sets_made >= sets_per_pokemon:
                         break
-                    moveset = top_moves_list[:4]
+                    # Start with top 4 observed moves, pad from all observed,
+                    # then fall back to type-appropriate moves from pokemon_data
+                    raw_moveset = list(top_moves_list[:4])
+                    # First pad from ALL observed moves for this species
+                    for m in all_moves_for_species:
+                        if len(raw_moveset) >= 4:
+                            break
+                        if m not in raw_moveset:
+                            raw_moveset.append(m)
+                    # Then pad from pokemon_data (STAB moves, utilities)
+                    moveset = self._pad_moveset(sp_id, raw_moveset, target=4, gen=self.gen)
+                    if len(moveset) < 4:
+                        continue  # skip if even padding couldn't reach 4
+                    ability = self._validate_ability(sp_id, ability)
                     key = (ability, item, tuple(sorted(moveset)))
                     if key in seen_keys:
                         continue
@@ -428,19 +547,29 @@ class MetaAnalyzer:
 
             # Add an alternate moveset if available
             if len(top_moves_list) > 4 and sets_made < sets_per_pokemon:
-                alt_moves = top_moves_list[2:6]
-                ability = top_abilities_list[0] if top_abilities_list else None
-                item = top_items_list[0] if top_items_list else None
-                key = (ability, item, tuple(sorted(alt_moves)))
-                if key not in seen_keys:
-                    pool.append({
-                        "species": sp_id,
-                        "ability": ability,
-                        "item": item,
-                        "moves": alt_moves,
-                        "nature": None,
-                        "tera_type": None,
-                    })
+                raw_alt = list(top_moves_list[2:6])
+                for m in all_moves_for_species:
+                    if len(raw_alt) >= 4:
+                        break
+                    if m not in raw_alt:
+                        raw_alt.append(m)
+                alt_moves = self._pad_moveset(sp_id, raw_alt, target=4, gen=self.gen)
+                if len(alt_moves) >= 4:
+                    ability = self._validate_ability(sp_id, top_abilities_list[0] if top_abilities_list else None)
+                    item = top_items_list[0] if top_items_list else None
+                    key = (ability, item, tuple(sorted(alt_moves)))
+                    if key not in seen_keys:
+                        pool.append({
+                            "species": sp_id,
+                            "ability": ability,
+                            "item": item,
+                            "moves": alt_moves,
+                            "nature": None,
+                            "tera_type": None,
+                        })
+
+        # Final pool validation: enforce 4-move minimum
+        pool = [p for p in pool if len([m for m in p.get("moves", []) if m]) >= 4]
 
         log.info(
             "Built Pokemon pool from replays: %d sets across %d species",
