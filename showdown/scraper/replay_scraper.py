@@ -213,16 +213,27 @@ class ReplayScraper:
 
             self._stats["fetched"] += 1
 
-            # Extract ratings
-            rating1 = None
-            rating2 = None
-            if "rating" in replay_data:
-                rating1 = replay_data.get("rating")
-            # Sometimes ratings are in the players field or log
-            if isinstance(replay_data.get("p1rating"), dict):
-                rating1 = replay_data["p1rating"].get("elo")
-            if isinstance(replay_data.get("p2rating"), dict):
-                rating2 = replay_data["p2rating"].get("elo")
+            # Parse the battle log first — it contains both players' ratings
+            log_text = replay_data.get("log", "")
+            if not log_text:
+                self._stats["errors"] += 1
+                return
+
+            battle = self.parser.parse(log_text, format_id)
+
+            # Use log-parsed ratings (most reliable: both players' pre-battle Elo)
+            rating1 = battle.rating1
+            rating2 = battle.rating2
+
+            # Fall back to JSON metadata if log parsing didn't find ratings
+            if rating1 is None:
+                if isinstance(replay_data.get("p1rating"), dict):
+                    rating1 = replay_data["p1rating"].get("elo")
+                elif "rating" in replay_data:
+                    rating1 = replay_data.get("rating")
+            if rating2 is None:
+                if isinstance(replay_data.get("p2rating"), dict):
+                    rating2 = replay_data["p2rating"].get("elo")
 
             # Filter by minimum rating
             if self.min_rating > 0:
@@ -231,14 +242,6 @@ class ReplayScraper:
                 if r1 < self.min_rating and r2 < self.min_rating:
                     self._stats["skipped"] += 1
                     return
-
-            # Parse the battle log
-            log_text = replay_data.get("log", "")
-            if not log_text:
-                self._stats["errors"] += 1
-                return
-
-            battle = self.parser.parse(log_text, format_id)
 
             # Supplement player names from JSON metadata if parser missed them
             if not battle.player1 and replay_data.get("p1"):

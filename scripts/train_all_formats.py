@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
-"""Train models for all formats that have sufficient data."""
+"""Train models for all formats that have sufficient data.
 
+Usage:
+    python scripts/train_all_formats.py                 # Default: 200K limit
+    python scripts/train_all_formats.py --limit 500000  # Custom limit
+    python scripts/train_all_formats.py --limit 0       # No limit (use all data)
+"""
+
+import argparse
 import asyncio
 import subprocess
 import sys
@@ -14,8 +21,14 @@ from showdown.utils.logging_config import setup_logging
 
 
 async def main():
+    parser = argparse.ArgumentParser(description="Train all formats")
+    parser.add_argument("--limit", type=int, default=200000,
+                        help="Max battles per format (0=unlimited, default=200000)")
+    parser.add_argument("--config", type=str, default=None)
+    args = parser.parse_args()
+
     log = setup_logging("INFO")
-    cfg = load_config()
+    cfg = load_config(args.config)
     db_path = cfg.get("database", {}).get("path", "data/replays.db")
     db = Database(db_path)
     await db.connect()
@@ -25,16 +38,27 @@ async def main():
     for cat, fmt_list in cfg.get("formats", {}).items():
         formats.extend(fmt_list)
 
+    min_rating = cfg.get("training", {}).get("min_rating_filter", 1200)
+    limit = args.limit if args.limit > 0 else None
+
     log.info("Checking replay counts for all formats...")
+    log.info("Settings: min_rating=%d, limit=%s", min_rating, limit or "unlimited")
+
     for fmt in formats:
         count = await db.get_replay_count(fmt)
         log.info("  %s: %d replays", fmt, count)
 
         if count >= 500:
             log.info("  -> Training %s (both models)...", fmt)
+            cmd = [
+                sys.executable, "scripts/train_model.py",
+                "--format", fmt, "--model", "both",
+                "--min-rating", str(min_rating),
+            ]
+            if limit:
+                cmd.extend(["--limit", str(limit)])
             result = subprocess.run(
-                [sys.executable, "scripts/train_model.py",
-                 "--format", fmt, "--model", "both", "--min-rating", "1000"],
+                cmd,
                 cwd=str(Path(__file__).resolve().parent.parent),
                 capture_output=False,
             )

@@ -1,9 +1,10 @@
-"""Competitive damage calculator for Gen 9 Pokemon.
+"""Competitive damage calculator for Pokemon (Gen 1-9).
 
-Implements the full Gen 9 damage formula with all item, ability, weather,
-terrain, and special move mechanic modifiers.
+Implements the damage formula with item, ability, weather, terrain, and
+special move mechanic modifiers.  Gen-aware: accepts an optional type_chart
+dict so that older-gen type matchups are computed correctly.
 
-Formula:
+Formula (Gen 3+):
     damage = floor(floor(floor(2*level/5 + 2) * BP * A / D) / 50 + 2)
            * targets * weather * crit * random * STAB * type_eff
            * burn * final_mods
@@ -19,7 +20,7 @@ References:
 
 import math
 import re
-from typing import Any
+from typing import Any, Dict, Tuple
 
 from .mechanics import (
     ITEM_EFFECTS, ABILITY_EFFECTS,
@@ -27,7 +28,10 @@ from .mechanics import (
     get_ability_stab_mult, get_ability_type_immunity,
 )
 from ..utils.constants import (
-    TYPES, TYPE_TO_IDX, type_effectiveness_against,
+    TYPES, TYPE_TO_IDX,
+    type_effectiveness_against,
+    type_effectiveness_against_gen,
+    _TYPE_CHART_GEN6PLUS,
 )
 
 
@@ -68,6 +72,7 @@ def estimate_damage_pct(
     def_data: dict,
     move_data: dict,
     level: int = 100,
+    type_chart: Dict[Tuple[str, str], float] | None = None,
 ) -> float:
     """Estimate damage as fraction of defender's HP (0 to 2.0 cap).
 
@@ -83,6 +88,7 @@ def estimate_damage_pct(
         def_data: Defender's pre-digested data dict (same keys)
         move_data: Move dict with basePower, category, type, flags, secondary, etc.
         level: Pokemon level (default 100)
+        type_chart: Optional gen-specific type chart. If None, uses Gen 6+ chart.
 
     Returns:
         Estimated damage as fraction of defender HP, capped at 2.0.
@@ -196,10 +202,13 @@ def estimate_damage_pct(
     if move_type in stab_types:
         modifier *= atk_data.get("stab_mult", 1.5)
 
-    # Type effectiveness
+    # Type effectiveness (gen-aware)
     def_types = def_data.get("types", [])
     if def_types:
-        type_eff = type_effectiveness_against(move_type, def_types)
+        if type_chart is not None:
+            type_eff = type_effectiveness_against_gen(move_type, def_types, type_chart)
+        else:
+            type_eff = type_effectiveness_against(move_type, def_types)
     else:
         type_eff = 1.0
 
@@ -240,6 +249,7 @@ def estimate_damage_pct(
 def estimate_best_move_damage(
     atk_data: dict,
     def_data: dict,
+    type_chart: Dict[Tuple[str, str], float] | None = None,
 ) -> float:
     """Estimate the best move's damage % from attacker against defender.
 
@@ -247,7 +257,7 @@ def estimate_best_move_damage(
     """
     best = 0.0
     for md in atk_data.get("moves_data", []):
-        dmg = estimate_damage_pct(atk_data, def_data, md)
+        dmg = estimate_damage_pct(atk_data, def_data, md, type_chart=type_chart)
         if dmg > best:
             best = dmg
     return best

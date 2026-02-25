@@ -454,6 +454,7 @@ def infer_spread(
     pokemon: dict,
     pkmn_data: PokemonDataLoader,
     usage_data: dict[str, dict] | None = None,
+    gen: int = 9,
 ) -> dict[str, Any]:
     """Infer EV spread and nature for a Pokemon using a three-tier fallback.
 
@@ -461,14 +462,21 @@ def infer_spread(
     Tier 2: Item-aware templates (Choice Band → Adamant, AV → HP/SpD, etc.)
     Tier 3: Role-based inference from base stats + movesets
 
+    For Gen 1-2, returns empty spreads (natures and modern EVs didn't exist).
+
     Args:
         pokemon: Pokemon dict with species, moves, item, ability, etc.
         pkmn_data: Loaded PokemonDataLoader instance.
         usage_data: Optional parsed usage data from StatsScraper.parse_usage_data().
+        gen: Generation number (1-9). Gen 1-2 skip natures/EVs.
 
     Returns:
         Dict with 'nature', 'evs' (dict of stat->value), 'ivs' (dict, possibly empty).
     """
+    # Gen 1-2: no natures, no modern EVs/IVs
+    if gen <= 2:
+        return {"nature": None, "evs": {}, "ivs": {}}
+
     species = pokemon.get("species", "")
     species_id = _to_id(species)
 
@@ -502,16 +510,19 @@ def apply_spreads(
     team: list[dict],
     pkmn_data: PokemonDataLoader,
     usage_data: dict[str, dict] | None = None,
+    gen: int = 9,
 ) -> list[dict]:
     """Apply inferred EV spreads and natures to an entire team.
 
     Only infers spreads for Pokemon that don't already have them
     (e.g. from Smogon stats). Pokemon with existing spreads are kept as-is.
+    For Gen 1-2, strips natures and EVs entirely.
 
     Args:
         team: List of Pokemon dicts.
         pkmn_data: Loaded PokemonDataLoader instance.
         usage_data: Optional parsed usage data for Tier 1 inference.
+        gen: Generation number (1-9).
 
     Returns:
         List of enriched Pokemon dicts with nature, evs, and ivs.
@@ -523,13 +534,19 @@ def apply_spreads(
         has_evs = pkmn.get("evs") and any(v > 0 for v in pkmn["evs"].values())
 
         if not has_nature or not has_evs:
-            spread = infer_spread(pkmn, pkmn_data, usage_data)
+            spread = infer_spread(pkmn, pkmn_data, usage_data, gen=gen)
             if not has_nature:
                 enriched["nature"] = spread["nature"]
             if not has_evs:
                 enriched["evs"] = spread["evs"]
             if spread.get("ivs"):
                 enriched.setdefault("ivs", spread["ivs"])
+
+        # Gen 1-2: force-strip natures and modern EVs (they didn't exist)
+        if gen <= 2:
+            enriched["nature"] = None
+            enriched["evs"] = {}
+            enriched["ivs"] = {}
 
         result.append(enriched)
     return result

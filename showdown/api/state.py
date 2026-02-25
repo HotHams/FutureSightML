@@ -6,10 +6,11 @@ from pathlib import Path
 
 import torch
 
-from ..config import load_config
+from ..config import load_config, resolve_data_path
 from ..data.database import Database
 from ..data.pokemon_data import PokemonDataLoader
 from ..data.features import FeatureExtractor
+from ..utils.constants import extract_gen
 from ..models.win_predictor import WinPredictor
 from ..models.xgb_predictor import XGBPredictor
 from ..models.ensemble import EnsemblePredictor
@@ -19,6 +20,11 @@ from ..teambuilder.evaluator import TeamEvaluator
 from ..teambuilder.meta_analysis import MetaAnalyzer
 
 log = logging.getLogger("showdown.api.state")
+
+
+def _to_id(name: str) -> str:
+    import re
+    return re.sub(r"[^a-z0-9]", "", name.lower())
 
 
 class AppState:
@@ -35,15 +41,23 @@ class AppState:
         """Load config, connect DB, load Pokemon data and all format models."""
         self.cfg = load_config(config_path)
         db_path = self.cfg.get("database", {}).get("path", "data/showdown.db")
-        self.db = Database(db_path)
-        await self.db.connect()
+
+        # Try connecting to DB — gracefully degrade if unavailable (packaged mode)
+        try:
+            self.db = Database(db_path)
+            await self.db.connect()
+        except Exception as e:
+            log.warning("Database unavailable (%s), using pre-exported pools", e)
+            self.db = None
 
         self.pkmn_data = PokemonDataLoader()
         await self.pkmn_data.load()
         log.info("Pokemon data loaded: %d species", len(self.pkmn_data.pokedex))
 
         # Load models for each format that has checkpoints
-        checkpoint_dir = self.cfg.get("training", {}).get("checkpoint_dir", "data/checkpoints")
+        checkpoint_dir = str(resolve_data_path(
+            self.cfg.get("training", {}).get("checkpoint_dir", "data/checkpoints")
+        ))
         all_formats = []
         for fmt_list in self.cfg.get("formats", {}).values():
             all_formats.extend(fmt_list)
@@ -67,7 +81,8 @@ class AppState:
         with open(vocab_path) as f:
             vocab = json.load(f)
 
-        fe = FeatureExtractor(pokemon_data=self.pkmn_data)
+        gen = extract_gen(fmt)
+        fe = FeatureExtractor(pokemon_data=self.pkmn_data, gen=gen)
         fe._species_idx = vocab["species"]
         fe._move_idx = vocab["moves"]
         fe._item_idx = vocab["items"]
@@ -123,34 +138,67 @@ class AppState:
         weights_path = Path(checkpoint_dir) / f"ensemble_{fmt}_weights.json"
         ensemble.load_weights(weights_path)
 
-        # Meta analyzer
-        meta_analyzer = MetaAnalyzer(self.db)
-        meta_teams = await meta_analyzer.build_meta_teams(fmt, n_teams=50)
+        # Meta analyzer + pool: try pre-exported JSON first, then DB
+        meta_teams = []
+        pokemon_pool = []
+        meta_analyzer = None
+        pool_json = resolve_data_path("data/pools") / f"{fmt}.json"
+
+        if pool_json.exists():
+            # Load from pre-exported JSON (fast path, works without DB)
+            with open(pool_json) as f:
+                pool_data = json.load(f)
+            meta_teams = pool_data.get("meta_teams", [])
+            pokemon_pool = pool_data.get("pokemon_pool", [])
+            # Validate moves against gen + learnability
+            if self.pkmn_data:
+                pokemon_pool = self._validate_pool_moves(pokemon_pool, gen)
+            log.info("Loaded %s from pool JSON: %d meta teams, %d pool sets",
+                     fmt, len(meta_teams), len(pokemon_pool))
+
+        if self.db and (not meta_teams or not pokemon_pool):
+            # Fall back to DB queries (dev mode with live database)
+            meta_analyzer = MetaAnalyzer(self.db, pokemon_data=self.pkmn_data, gen=gen)
+            if not meta_teams:
+                meta_teams = await meta_analyzer.build_meta_teams(fmt, n_teams=50)
+
+            if not pokemon_pool:
+                year_month = await self.db.get_latest_usage_month(fmt)
+                if year_month:
+                    for rating in [1825, 1760, 1630, 1500, 0]:
+                        raw_usage = await self.db.get_usage_stats(fmt, year_month, rating)
+                        if raw_usage:
+                            from ..scraper.stats_scraper import StatsScraper
+                            usage_parsed = StatsScraper(self.db).parse_usage_data(raw_usage)
+                            pokemon_pool = meta_analyzer.build_full_pokemon_pool(
+                                usage_parsed, top_n=80, sets_per_pokemon=4
+                            )
+                            break
+
+                if not pokemon_pool:
+                    log.info("No usage stats for %s, building pool from replays...", fmt)
+                    pokemon_pool = await meta_analyzer.build_pool_from_replays(
+                        fmt, top_n=80, sets_per_pokemon=4
+                    )
 
         # Pre-compute meta team XGBoost features for fast genetic algo evaluation
         ensemble.precompute_meta_features(meta_teams)
 
         constraints = FormatConstraints(fmt, pokemon_data=self.pkmn_data)
 
-        # Build pokemon pool (try usage stats first, fall back to replays)
-        pokemon_pool = []
-        year_month = await self.db.get_latest_usage_month(fmt)
-        if year_month:
-            for rating in [1825, 1760, 1630, 1500, 0]:
-                raw_usage = await self.db.get_usage_stats(fmt, year_month, rating)
-                if raw_usage:
-                    from ..scraper.stats_scraper import StatsScraper
-                    usage_parsed = StatsScraper(self.db).parse_usage_data(raw_usage)
-                    pokemon_pool = meta_analyzer.build_full_pokemon_pool(
-                        usage_parsed, top_n=80, sets_per_pokemon=4
-                    )
-                    break
+        # Tier-based filtering for Gen 9 formats where tier data is available
+        if fmt.startswith("gen9") and self.pkmn_data and self.pkmn_data.formats_data:
+            tier = self._extract_tier(fmt)
+            if tier:
+                tier_pokemon = set(self.pkmn_data.get_tier_pokemon(tier))
+                if tier_pokemon:
+                    filtered = [p for p in pokemon_pool if _to_id(p.get("species", "")) in tier_pokemon]
+                    if len(filtered) >= 6:
+                        log.info("Tier filter %s: %d -> %d sets", tier, len(pokemon_pool), len(filtered))
+                        pokemon_pool = filtered
 
-        if not pokemon_pool:
-            log.info("No usage stats for %s, building pool from replays...", fmt)
-            pokemon_pool = await meta_analyzer.build_pool_from_replays(
-                fmt, top_n=80, sets_per_pokemon=4
-            )
+        if len(pokemon_pool) < 6:
+            log.warning("Insufficient Pokemon pool for %s: only %d sets", fmt, len(pokemon_pool))
 
         return FormatState(
             format_id=fmt,
@@ -162,6 +210,50 @@ class AppState:
             pokemon_pool=pokemon_pool,
             vocab=vocab,
         )
+
+    @staticmethod
+    def _extract_tier(fmt: str) -> str | None:
+        """Extract the tier from a format ID. e.g. 'gen9ou' -> 'OU'."""
+        import re
+        m = re.match(r"gen\d+(.*)", fmt)
+        if not m:
+            return None
+        tier_part = m.group(1).lower()
+        # Map common tier IDs
+        tier_map = {
+            "ou": "OU", "uu": "UU", "ru": "RU", "nu": "NU",
+            "pu": "PU", "ubers": "UBERS",
+        }
+        return tier_map.get(tier_part)
+
+    def _validate_pool_moves(self, pool: list[dict], gen: int) -> list[dict]:
+        """Strip moves that don't exist in this gen or aren't learnable.
+
+        Removes illegal moves from each set. Drops sets left with <2 moves.
+        """
+        cleaned = []
+        stripped_total = 0
+        for pset in pool:
+            species = _to_id(pset.get("species", ""))
+            moves = pset.get("moves", [])
+            valid_moves = []
+            for m in moves:
+                mid = _to_id(m)
+                if self.pkmn_data.move_exists_in_gen(mid, gen):
+                    if self.pkmn_data.can_learn_move(species, mid, gen):
+                        valid_moves.append(m)
+                    else:
+                        stripped_total += 1
+                else:
+                    stripped_total += 1
+            if len(valid_moves) >= 2:
+                pset = dict(pset)
+                pset["moves"] = valid_moves
+                cleaned.append(pset)
+        if stripped_total:
+            log.info("Gen %d pool validation: stripped %d illegal moves, %d -> %d sets",
+                     gen, stripped_total, len(pool), len(cleaned))
+        return cleaned
 
     async def shutdown(self):
         if self.db:
@@ -177,7 +269,7 @@ class FormatState:
         feature_extractor: FeatureExtractor,
         ensemble: EnsemblePredictor,
         meta_teams: list[list[dict]],
-        meta_analyzer: MetaAnalyzer,
+        meta_analyzer: MetaAnalyzer | None,
         constraints: FormatConstraints,
         pokemon_pool: list[dict],
         vocab: dict,

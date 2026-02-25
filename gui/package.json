@@ -16,27 +16,34 @@
       "output": "dist"
     },
     "win": {
-      "target": "nsis",
-      "icon": "static/icon.ico"
+      "target": [
+        {
+          "target": "dir",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "static/icon.ico",
+      "signAndEditExecutable": false
     },
+    "forceCodeSigning": false,
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "static/icon.ico",
+      "uninstallerIcon": "static/icon.ico",
+      "installerHeaderIcon": "static/icon.ico"
     },
+    "compression": "maximum",
     "extraResources": [
       {
-        "from": "../",
-        "to": "backend",
+        "from": "../dist/run_server",
+        "to": "backend/dist/run_server",
         "filter": [
-          "showdown/**",
-          "scripts/**",
-          "config.yaml",
-          "data/**/*.db",
-          "data/checkpoints/**",
-          "pyproject.toml"
+          "**/*"
         ]
       }
-    ]
+    ],
+    "asar": false
   },
   "devDependencies": {
     "electron": "^33.0.0",

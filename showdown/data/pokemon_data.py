@@ -21,6 +21,7 @@ DATA_CACHE_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "raw"
 _JSON_ENDPOINTS = {
     "pokedex": "https://play.pokemonshowdown.com/data/pokedex.json",
     "moves": "https://play.pokemonshowdown.com/data/moves.json",
+    "learnsets": "https://play.pokemonshowdown.com/data/learnsets.json",
 }
 
 # TypeScript sources (for data without JSON endpoints)
@@ -31,6 +32,10 @@ _TS_ENDPOINTS = {
     "typechart": f"{_SHOWDOWN_BASE}/typechart.ts",
     "formats": f"{_SHOWDOWN_BASE}/formats-data.ts",
 }
+
+
+# Maximum move `num` introduced per generation (inclusive upper bound)
+_GEN_MOVE_MAX_NUM = {1: 165, 2: 251, 3: 354, 4: 467, 5: 559, 6: 621, 7: 742, 8: 850, 9: 99999}
 
 
 def _to_id(name: str) -> str:
@@ -141,6 +146,8 @@ class PokemonDataLoader:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.pokedex: dict[str, Any] = {}
         self.moves: dict[str, Any] = {}
+        self.learnsets: dict[str, Any] = {}
+        self.gen12_learnsets: dict[str, Any] = {}  # Gen 1-2 mod learnsets
         self.items: dict[str, Any] = {}
         self.abilities: dict[str, Any] = {}
         self.formats_data: dict[str, Any] = {}
@@ -188,6 +195,9 @@ class PokemonDataLoader:
                 attr_name = name if name != "formats" else "formats_data"
                 setattr(self, attr_name, parsed)
                 log.info("Parsed %s: %d entries (TS)", name, len(parsed))
+
+        # Phase 3: Load Gen 1-2 learnsets from Showdown mod file
+        await self._load_gen12_learnsets(session, force_download)
 
         # Supplement abilities from pokedex data (TS parser misses most due to JS functions)
         if len(self.abilities) < 100 and self.pokedex:
@@ -241,6 +251,74 @@ class PokemonDataLoader:
         self.ensure_loaded()
         return self.abilities.get(_to_id(name))
 
+    def move_exists_in_gen(self, move_name: str, gen: int) -> bool:
+        """Check if a move existed in the given generation."""
+        move = self.moves.get(_to_id(move_name))
+        if not move:
+            return False
+        num = move.get("num", 0)
+        if num <= 0:
+            return False
+        max_num = _GEN_MOVE_MAX_NUM.get(gen, 99999)
+        return num <= max_num
+
+    def can_learn_move(self, species_name: str, move_name: str, gen: int) -> bool:
+        """Check if a species can learn a move in the given generation.
+
+        Uses:
+        - Gen 1-2: Showdown gen2 mod learnsets (complete Gen 1-2 data)
+        - Gen 3+: Main Showdown learnsets.json
+        Falls back to gen-existence check if no learnset data available.
+        """
+        move_id = _to_id(move_name)
+        species_id = _to_id(species_name)
+
+        # First check: move must exist in this gen
+        if not self.move_exists_in_gen(move_id, gen):
+            return False
+
+        # Gen 1-2: use dedicated gen12_learnsets
+        if gen <= 2 and self.gen12_learnsets:
+            return self._check_learnset(species_id, move_id, gen, self.gen12_learnsets)
+
+        # Gen 3+: use main learnsets
+        if gen >= 3 and self.learnsets:
+            return self._check_learnset(species_id, move_id, gen, self.learnsets)
+
+        return True  # No learnset data available, allow if move exists in gen
+
+    def _check_learnset(
+        self, species_id: str, move_id: str, gen: int, learnset_db: dict
+    ) -> bool:
+        """Check a specific learnset database for move learnability."""
+        ls_entry = learnset_db.get(species_id, {}).get("learnset", {})
+        if not ls_entry:
+            # No learnset data — check pre-evolutions
+            prevo = self.pokedex.get(species_id, {}).get("prevo")
+            if prevo:
+                return self._check_learnset(_to_id(prevo), move_id, gen, learnset_db)
+            return True  # No data at all, allow it
+
+        entries = ls_entry.get(move_id, [])
+        if not entries:
+            # Move not in this species' learnset — check pre-evolution
+            prevo = self.pokedex.get(species_id, {}).get("prevo")
+            if prevo:
+                return self._check_learnset(_to_id(prevo), move_id, gen, learnset_db)
+            return False
+
+        # Check if any learnset entry is from this gen or earlier
+        for entry in entries:
+            entry_gen = ""
+            for c in entry:
+                if c.isdigit():
+                    entry_gen += c
+                else:
+                    break
+            if entry_gen and int(entry_gen) <= gen:
+                return True
+        return False
+
     def get_all_species(self) -> list[str]:
         self.ensure_loaded()
         return list(self.pokedex.keys())
@@ -272,6 +350,94 @@ class PokemonDataLoader:
     def ability_to_idx(self) -> dict[str, int]:
         self.ensure_loaded()
         return {name: i + 1 for i, name in enumerate(sorted(self.abilities.keys()))}
+
+    async def _load_gen12_learnsets(
+        self, session: "aiohttp.ClientSession", force_download: bool
+    ) -> None:
+        """Download and parse Gen 1-2 learnsets from Showdown's Gen 2 mod file."""
+        gen2_url = (
+            "https://raw.githubusercontent.com/smogon/pokemon-showdown"
+            "/master/data/mods/gen2/learnsets.ts"
+        )
+        cache_file = self.cache_dir / "gen2_learnsets.ts"
+        json_cache = self.cache_dir / "gen2_learnsets.json"
+
+        # Use pre-parsed JSON cache if available
+        if json_cache.exists() and not force_download:
+            with open(json_cache, encoding="utf-8") as f:
+                self.gen12_learnsets = json.load(f)
+            log.info("Loaded Gen 1-2 learnsets: %d species (cached JSON)", len(self.gen12_learnsets))
+            return
+
+        # Download TS source
+        if not cache_file.exists() or force_download:
+            log.info("Downloading Gen 1-2 learnsets from Showdown mods...")
+            try:
+                async with session.get(gen2_url) as resp:
+                    if resp.status != 200:
+                        log.warning("Failed to download Gen 1-2 learnsets: HTTP %d", resp.status)
+                        return
+                    raw = await resp.text()
+                cache_file.write_text(raw, encoding="utf-8")
+            except Exception as e:
+                log.warning("Failed to download Gen 1-2 learnsets: %s", e)
+                return
+        else:
+            raw = cache_file.read_text(encoding="utf-8")
+
+        # Parse TS: extract Pokemon -> learnset -> { move: [sources] }
+        self.gen12_learnsets = self._parse_learnset_ts(raw)
+
+        # Save as JSON for faster future loads
+        with open(json_cache, "w", encoding="utf-8") as f:
+            json.dump(self.gen12_learnsets, f)
+        log.info("Loaded Gen 1-2 learnsets: %d species (parsed from TS)", len(self.gen12_learnsets))
+
+    @staticmethod
+    def _parse_learnset_ts(content: str) -> dict[str, Any]:
+        """Parse Showdown's learnsets.ts format into {species: {learnset: {move: [sources]}}}."""
+        results = {}
+        pokemon_pat = re.compile(r"\t(\w+):\s*\{")
+        learnset_pat = re.compile(r"learnset:\s*\{")
+        move_pat = re.compile(r'(\w+):\s*\[(.*?)\]')
+
+        pos = 0
+        while True:
+            pm = pokemon_pat.search(content, pos)
+            if not pm:
+                break
+            pkmn_name = pm.group(1)
+            lm = learnset_pat.search(content, pm.end())
+            if not lm or lm.start() - pm.end() > 500:
+                pos = pm.end()
+                continue
+
+            # Find matching closing brace for learnset block
+            brace_start = lm.end() - 1
+            depth = 0
+            end = brace_start
+            for i in range(brace_start, min(brace_start + 50000, len(content))):
+                if content[i] == "{":
+                    depth += 1
+                elif content[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        end = i + 1
+                        break
+
+            learnset_text = content[brace_start:end]
+            moves = {}
+            for mm in move_pat.finditer(learnset_text):
+                move_name = mm.group(1)
+                sources_raw = mm.group(2)
+                sources = [s.strip().strip('"') for s in sources_raw.split(",") if s.strip()]
+                moves[move_name] = sources
+
+            if moves:
+                results[pkmn_name] = {"learnset": moves}
+            pos = pm.end()
+
+        return results
 
     def _extract_abilities_from_pokedex(self) -> dict[str, Any]:
         """Extract ability entries from pokedex data as a fallback."""
