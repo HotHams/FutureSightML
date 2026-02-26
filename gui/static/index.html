@@ -349,7 +349,7 @@ function formatIVs(ivs) {
     return parts.length > 0 ? parts.join(' / ') : null;
 }
 
-function TeamSlot({ pokemon, index, onRemove, gen }) {
+function TeamSlot({ pokemon, index, onRemove, gen, onClick, isSelected, team, format, onReplace }) {
     if (!pokemon) {
         return (
             <div className="retro-panel rounded-xl p-4 flex items-center justify-center h-28 border-2 border-dashed border-dark-600">
@@ -363,8 +363,12 @@ function TeamSlot({ pokemon, index, onRemove, gen }) {
     const ivStr = g >= 3 ? formatIVs(pokemon.ivs) : null;
 
     return (
-        <div className="retro-panel rounded-xl p-3 relative group fade-in">
-            <button onClick={() => onRemove(index)}
+        <div className={`retro-panel rounded-xl p-3 relative group fade-in cursor-pointer ${isSelected ? 'glow' : ''}`}
+             onClick={() => onClick && onClick(index)}>
+            <div className="absolute -top-2 right-6 flex gap-1 opacity-0 group-hover:opacity-100">
+                {team && onReplace && <SlotSuggestionBtn team={team} slotIdx={index} format={format} onReplace={(s) => onReplace(index, s)} />}
+            </div>
+            <button onClick={(e) => { e.stopPropagation(); onRemove(index); }}
                     className="absolute -top-2 -right-2 w-6 h-6 bg-red-600 border-2 border-red-900 text-xs font-bold opacity-0 group-hover:opacity-100 flex items-center justify-center">
                 X
             </button>
@@ -849,7 +853,7 @@ function AnalysisPanel({ team, format, autoRun, onAnalysisResult }) {
     );
 }
 
-function MetaPage({ format }) {
+function MetaPage({ format, onLoadTeam }) {
     const [meta, setMeta] = useState(null);
     const [loading, setLoading] = useState(true);
 
@@ -864,6 +868,32 @@ function MetaPage({ format }) {
         }
         load();
     }, [format]);
+
+    function detectArchetype(pokemon) {
+        const species = pokemon.map(s => (s || '').toLowerCase());
+        const all = species.join(' ');
+        if (['stealthrock','spikes','toxicspikes'].some(h => all.includes(h))) return 'Balance';
+        return 'Offense';
+    }
+
+    async function handleCopy(team) {
+        const teamData = team.pokemon.map(sp => ({species: sp, moves: [], ability: '', item: ''}));
+        try {
+            const res = await fetch(`${API}/team/export`, {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ team: teamData }),
+            });
+            const data = await res.json();
+            await navigator.clipboard.writeText(data.paste || '');
+        } catch {}
+    }
+
+    function handleLoad(team) {
+        if (onLoadTeam) {
+            const teamData = team.pokemon.map(sp => ({species: sp, moves: [], ability: '', item: ''}));
+            onLoadTeam(teamData);
+        }
+    }
 
     if (loading) return <div className="flex items-center justify-center py-20"><div className="pokeball-spinner" /></div>;
     if (!meta) return <div className="text-center text-gray-400 py-10">No meta data available</div>;
@@ -903,6 +933,12 @@ function MetaPage({ format }) {
                                     <span className="text-[9px] text-gray-500 truncate w-12 text-center">{sp}</span>
                                 </div>
                             ))}
+                            <div className="flex gap-1 ml-auto flex-shrink-0">
+                                <button onClick={() => handleLoad(team)}
+                                        className="text-[9px] px-2 py-0.5 bg-accent2 text-white font-bold hover:bg-blue-700">LOAD</button>
+                                <button onClick={() => handleCopy(team)}
+                                        className="text-[9px] px-2 py-0.5 bg-dark-600 text-white font-bold hover:bg-dark-700">COPY</button>
+                            </div>
                         </div>
                     ))}
                 </div>
@@ -911,9 +947,11 @@ function MetaPage({ format }) {
     );
 }
 
-function SavedTeamsPanel({ format, onLoad, version }) {
+function SavedTeamsPanel({ format, onLoad, version, onCompare }) {
     const [saved, setSaved] = useState([]);
     const [expanded, setExpanded] = useState(false);
+    const [compareMode, setCompareMode] = useState(false);
+    const [selected, setSelected] = useState([]);
 
     useEffect(() => {
         loadSaved();
@@ -945,18 +983,46 @@ function SavedTeamsPanel({ format, onLoad, version }) {
         } catch {}
     }
 
+    function toggleSelect(id) {
+        setSelected(prev => prev.includes(id) ? prev.filter(x => x !== id) : prev.length < 2 ? [...prev, id] : prev);
+    }
+
+    function doCompare() {
+        if (selected.length !== 2 || !onCompare) return;
+        const t1 = saved.find(s => s.id === selected[0]);
+        const t2 = saved.find(s => s.id === selected[1]);
+        if (t1 && t2) onCompare(t1.pokemon, t2.pokemon);
+        setCompareMode(false);
+        setSelected([]);
+    }
+
     if (saved.length === 0) return null;
 
     return (
         <div className="retro-panel rounded-xl p-4">
             <div className="flex items-center justify-between cursor-pointer" onClick={() => setExpanded(!expanded)}>
                 <h3 className="font-bold">Saved Teams ({saved.length})</h3>
-                <span className="text-xs text-gray-400">{expanded ? '[-]' : '[+]'}</span>
+                <div className="flex gap-2 items-center">
+                    {saved.length >= 2 && expanded && (
+                        <button onClick={(e) => { e.stopPropagation(); setCompareMode(!compareMode); setSelected([]); }}
+                                className={`text-[9px] px-2 py-0.5 font-bold ${compareMode ? 'bg-accent text-white' : 'bg-dark-600 text-gray-400 hover:text-white'}`}>
+                            CMP
+                        </button>
+                    )}
+                    <span className="text-xs text-gray-400">{expanded ? '[-]' : '[+]'}</span>
+                </div>
             </div>
             {expanded && (
                 <div className="space-y-2 mt-3">
+                    {compareMode && (
+                        <div className="text-[9px] text-accent mb-1">
+                            Select 2 teams to compare ({selected.length}/2)
+                            {selected.length === 2 && <button onClick={doCompare} className="ml-2 px-2 py-0.5 bg-accent text-white font-bold">Compare!</button>}
+                        </div>
+                    )}
                     {saved.map(s => (
-                        <div key={s.id} className="bg-dark-700 rounded-lg p-2">
+                        <div key={s.id} className={`bg-dark-700 rounded-lg p-2 ${compareMode && selected.includes(s.id) ? 'border-2 border-accent' : ''}`}
+                             onClick={() => compareMode && toggleSelect(s.id)}>
                             <div className="flex items-center justify-between mb-1.5">
                                 <input
                                     className="text-sm font-semibold bg-transparent border-none outline-none flex-1 min-w-0 truncate"
@@ -964,17 +1030,20 @@ function SavedTeamsPanel({ format, onLoad, version }) {
                                     onBlur={e => { if (e.target.value !== s.name) renameTeam(s.id, e.target.value); }}
                                     onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
                                     style={{ padding: 0 }}
+                                    onClick={e => compareMode && e.preventDefault()}
                                 />
-                                <div className="flex gap-1 ml-2 flex-shrink-0">
-                                    <button onClick={() => onLoad(s.pokemon)}
-                                            className="text-[9px] px-2 py-0.5 bg-accent2 text-white font-bold hover:bg-blue-700">
-                                        LOAD
-                                    </button>
-                                    <button onClick={() => deleteTeam(s.id)}
-                                            className="text-[9px] px-2 py-0.5 bg-red-800 text-white font-bold hover:bg-red-600">
-                                        DEL
-                                    </button>
-                                </div>
+                                {!compareMode && (
+                                    <div className="flex gap-1 ml-2 flex-shrink-0">
+                                        <button onClick={() => onLoad(s.pokemon)}
+                                                className="text-[9px] px-2 py-0.5 bg-accent2 text-white font-bold hover:bg-blue-700">
+                                            LOAD
+                                        </button>
+                                        <button onClick={() => deleteTeam(s.id)}
+                                                className="text-[9px] px-2 py-0.5 bg-red-800 text-white font-bold hover:bg-red-600">
+                                            DEL
+                                        </button>
+                                    </div>
+                                )}
                             </div>
                             <div className="flex gap-1 items-center">
                                 <span className={`text-[10px] font-bold mr-1 ${s.winrate >= 70 ? 'text-green-400' : s.winrate >= 50 ? 'text-yellow-400' : 'text-red-400'}`}>
@@ -1025,6 +1094,585 @@ function GeneratedTeams({ teams, onSelect }) {
     );
 }
 
+/* ===== F3: Usage Stats Panel (right column) ===== */
+function UsageStatsPanel({ format }) {
+    const [usage, setUsage] = useState(null);
+    const [expanded, setExpanded] = useState(null);
+    const [detail, setDetail] = useState(null);
+
+    useEffect(() => {
+        fetch(`${API}/meta/${format}`).then(r => r.json()).then(d => {
+            setUsage(d.top_pokemon || []);
+        }).catch(() => {});
+        setExpanded(null);
+        setDetail(null);
+    }, [format]);
+
+    async function toggleSpecies(species) {
+        if (expanded === species) { setExpanded(null); setDetail(null); return; }
+        setExpanded(species);
+        try {
+            const res = await fetch(`${API}/meta/${format}/pokemon/${encodeURIComponent(species)}`);
+            const data = await res.json();
+            setDetail(data);
+        } catch { setDetail(null); }
+    }
+
+    if (!usage || usage.length === 0) return null;
+    const maxSets = usage[0]?.sets || 1;
+
+    return (
+        <div className="retro-panel rounded-xl p-4">
+            <div className="retro-panel-header">Usage Stats</div>
+            <div className="space-y-1">
+                {usage.slice(0, 15).map((p, i) => (
+                    <div key={i}>
+                        <div className="flex items-center gap-2 cursor-pointer hover:bg-dark-700 p-1" onClick={() => toggleSpecies(p.species)}>
+                            <PokemonSprite species={p.species} size={24} />
+                            <span className="text-xs flex-1 truncate">{p.species}</span>
+                            <div className="w-20 bg-dark-700 h-2">
+                                <div className="h-2 bg-accent" style={{width: `${(p.sets/maxSets)*100}%`}} />
+                            </div>
+                            <span className="text-[9px] text-gray-500 w-8 text-right">{p.sets}</span>
+                        </div>
+                        {expanded === p.species && detail && (
+                            <div className="bg-dark-700 p-2 ml-8 text-[9px] space-y-1 fade-in">
+                                {detail.top_moves && detail.top_moves.length > 0 && (
+                                    <div><span className="text-gray-500">Moves:</span> {detail.top_moves.slice(0,3).map(m => `${m.name} (${m.pct}%)`).join(', ')}</div>
+                                )}
+                                {detail.top_items && detail.top_items.length > 0 && (
+                                    <div><span className="text-gray-500">Items:</span> {detail.top_items.slice(0,3).map(m => `${m.name} (${m.pct}%)`).join(', ')}</div>
+                                )}
+                                {detail.top_abilities && detail.top_abilities.length > 0 && (
+                                    <div><span className="text-gray-500">Abilities:</span> {detail.top_abilities.slice(0,3).map(m => `${m.name} (${m.pct}%)`).join(', ')}</div>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
+
+/* ===== F6: Counter/Check Panel (right column) ===== */
+function CounterPanel({ pokemon, format }) {
+    const [data, setData] = useState(null);
+    const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        if (!pokemon) { setData(null); return; }
+        setLoading(true);
+        fetch(`${API}/team/counters`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ format_id: format, pokemon, n: 8 }),
+        }).then(r => r.json()).then(d => { setData(d); setLoading(false); })
+          .catch(() => setLoading(false));
+    }, [pokemon?.species, format]);
+
+    if (!pokemon) return null;
+    if (loading) return <div className="retro-panel rounded-xl p-4"><div className="pokeball-spinner mx-auto" /></div>;
+    if (!data) return null;
+
+    const renderList = (items, label, color) => items && items.length > 0 ? (
+        <div>
+            <div className={`text-xs font-bold ${color} mb-1`}>{label}</div>
+            {items.slice(0, 5).map((c, i) => (
+                <div key={i} className="flex items-center gap-2 py-0.5">
+                    <PokemonSprite species={c.species} size={24} />
+                    <span className="text-xs flex-1 truncate">{c.species}</span>
+                    <span className="text-[9px] text-gray-400">{c.best_move}</span>
+                    <span className="text-[9px] text-green-400">{c.dmg_to_target}%</span>
+                </div>
+            ))}
+        </div>
+    ) : null;
+
+    return (
+        <div className="retro-panel rounded-xl p-4 fade-in">
+            <div className="retro-panel-header">Counters for {pokemon.species}</div>
+            <div className="space-y-3">
+                {renderList(data.counters, 'Counters (safe switch-ins)', 'text-green-400')}
+                {renderList(data.checks, 'Checks (force out)', 'text-yellow-400')}
+                {(!data.counters?.length && !data.checks?.length) && <div className="text-xs text-gray-500">No strong counters found in pool</div>}
+            </div>
+        </div>
+    );
+}
+
+/* ===== F2: Slot Suggestion Dropdown ===== */
+function SlotSuggestionBtn({ team, slotIdx, format, onReplace }) {
+    const [open, setOpen] = useState(false);
+    const [suggestions, setSuggestions] = useState([]);
+    const [loading, setLoading] = useState(false);
+
+    async function loadSuggestions(e) {
+        e.stopPropagation();
+        if (open) { setOpen(false); return; }
+        setOpen(true);
+        setLoading(true);
+        try {
+            const res = await fetch(`${API}/team/suggest-slot`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ format_id: format, team: team.filter(Boolean), slot_idx: slotIdx }),
+            });
+            const data = await res.json();
+            setSuggestions(data.suggestions || []);
+        } catch { setSuggestions([]); }
+        setLoading(false);
+    }
+
+    return (
+        <div className="relative" style={{zIndex: 20}}>
+            <button onClick={loadSuggestions}
+                    className="text-[8px] px-1.5 py-0.5 bg-accent2 text-white font-bold opacity-0 group-hover:opacity-100 hover:bg-blue-700"
+                    title="Suggest replacements">
+                ?
+            </button>
+            {open && (
+                <div className="absolute top-6 right-0 w-56 bg-dark-800 border-2 border-dark-600 p-2 shadow-lg" style={{zIndex: 30}}>
+                    <div className="text-[9px] text-gray-500 mb-1">Suggested replacements:</div>
+                    {loading ? <div className="pokeball-spinner mx-auto" /> :
+                        suggestions.length === 0 ? <div className="text-[9px] text-gray-500">No suggestions</div> :
+                        suggestions.map((s, i) => (
+                            <div key={i} className="flex items-center gap-1.5 py-0.5 cursor-pointer hover:bg-dark-700 px-1"
+                                 onClick={(e) => { e.stopPropagation(); onReplace(s); setOpen(false); }}>
+                                <PokemonSprite species={s.species} size={20} />
+                                <span className="text-[9px] flex-1 truncate">{s.species}</span>
+                                <span className={`text-[9px] font-bold ${s.delta > 0 ? 'text-green-400' : s.delta < 0 ? 'text-red-400' : 'text-gray-400'}`}>
+                                    {s.delta > 0 ? '+' : ''}{(s.delta*100).toFixed(1)}%
+                                </span>
+                            </div>
+                        ))
+                    }
+                    <button onClick={(e) => { e.stopPropagation(); setOpen(false); }} className="text-[8px] text-gray-500 mt-1 w-full text-center">close</button>
+                </div>
+            )}
+        </div>
+    );
+}
+
+/* ===== F1: Head-to-Head Page ===== */
+function HeadToHeadPage({ format, myTeam }) {
+    const [team2Paste, setTeam2Paste] = useState('');
+    const [team2, setTeam2] = useState([]);
+    const [result, setResult] = useState(null);
+    const [loading, setLoading] = useState(false);
+
+    async function importOpponent() {
+        try {
+            const res = await fetch(`${API}/team/import`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ format_id: format, paste: team2Paste }),
+            });
+            const data = await res.json();
+            if (data.team) setTeam2(data.team);
+        } catch {}
+    }
+
+    async function runH2H() {
+        const t1 = myTeam.filter(Boolean);
+        if (t1.length === 0 || team2.length === 0) return;
+        setLoading(true);
+        try {
+            const res = await fetch(`${API}/team/head-to-head`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ format_id: format, team1: t1, team2 }),
+            });
+            setResult(await res.json());
+        } catch {}
+        setLoading(false);
+    }
+
+    const t1 = myTeam.filter(Boolean);
+    const cellColor = (dmg) => dmg >= 100 ? 'bg-green-600/40' : dmg >= 50 ? 'bg-green-500/20' : dmg >= 25 ? 'bg-yellow-500/15' : 'bg-red-500/15';
+
+    return (
+        <div className="space-y-4 fade-in">
+            <div className="grid grid-cols-2 gap-4">
+                {/* Your Team */}
+                <div className="retro-panel rounded-xl p-4">
+                    <div className="retro-panel-header">Your Team</div>
+                    {t1.length === 0 ? <div className="text-xs text-gray-500">Build a team first</div> :
+                        <div className="flex gap-1 flex-wrap">
+                            {t1.map((p, i) => <div key={i} className="flex flex-col items-center">
+                                <PokemonSprite species={p.species} size={36} />
+                                <span className="text-[8px] text-gray-400 truncate w-12 text-center">{p.species}</span>
+                            </div>)}
+                        </div>
+                    }
+                </div>
+                {/* Opponent Team */}
+                <div className="retro-panel rounded-xl p-4">
+                    <div className="retro-panel-header">Opponent Team</div>
+                    {team2.length > 0 ? (
+                        <div className="flex gap-1 flex-wrap">
+                            {team2.map((p, i) => <div key={i} className="flex flex-col items-center">
+                                <PokemonSprite species={p.species} size={36} />
+                                <span className="text-[8px] text-gray-400 truncate w-12 text-center">{p.species}</span>
+                            </div>)}
+                        </div>
+                    ) : (
+                        <div>
+                            <textarea value={team2Paste} onChange={e => setTeam2Paste(e.target.value)}
+                                      placeholder="Paste opponent's team..." className="w-full bg-dark-700 p-2 text-xs h-24 resize-none mb-2" />
+                            <button onClick={importOpponent} className="w-full bg-accent2 text-white py-1 text-xs font-bold">Import Opponent</button>
+                        </div>
+                    )}
+                    {team2.length > 0 && <button onClick={() => setTeam2([])} className="text-[9px] text-gray-500 mt-1">Clear</button>}
+                </div>
+            </div>
+
+            <button onClick={runH2H} disabled={loading || t1.length === 0 || team2.length === 0}
+                    className="w-full bg-accent hover:bg-red-700 disabled:bg-gray-600 text-white font-bold py-2 text-sm">
+                {loading ? 'Analyzing...' : 'Run Head-to-Head'}
+            </button>
+
+            {result && (
+                <div className="space-y-4 fade-in">
+                    {/* Win Probability */}
+                    {result.win_probability && (
+                        <div className="retro-panel rounded-xl p-4 text-center">
+                            <div className="text-lg font-bold">
+                                <span className={result.win_probability.team1_win_prob >= 50 ? 'text-green-400' : 'text-red-400'}>
+                                    {result.win_probability.team1_win_prob}%
+                                </span>
+                                <span className="text-gray-500 mx-3">vs</span>
+                                <span className={result.win_probability.team2_win_prob >= 50 ? 'text-green-400' : 'text-red-400'}>
+                                    {result.win_probability.team2_win_prob}%
+                                </span>
+                            </div>
+                            <div className="w-full bg-dark-700 h-4 mt-2">
+                                <div className="h-4 bg-accent2" style={{width: `${result.win_probability.team1_win_prob}%`}} />
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 6x6 Matchup Grid */}
+                    {result.matchup_matrix && result.matchup_matrix.length > 0 && (
+                        <div className="retro-panel rounded-xl p-4 overflow-x-auto">
+                            <div className="retro-panel-header">Matchup Matrix (Your ATK dmg%)</div>
+                            <table className="w-full text-center text-[9px]">
+                                <thead>
+                                    <tr>
+                                        <th className="p-1"></th>
+                                        {team2.map((p, j) => <th key={j} className="p-1"><PokemonSprite species={p.species} size={28} /><div className="truncate w-14">{p.species}</div></th>)}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {t1.map((atk, i) => (
+                                        <tr key={i}>
+                                            <td className="p-1"><PokemonSprite species={atk.species} size={28} /><div className="truncate w-14">{atk.species}</div></td>
+                                            {team2.map((def_, j) => {
+                                                const cell = result.matchup_matrix.find(m => m.atk === atk.species && m.def_ === def_.species);
+                                                const dmg = cell ? cell.atk_dmg : 0;
+                                                return <td key={j} className={`p-1 ${cellColor(dmg)}`} title={cell ? `${cell.atk_move}: ${dmg}%` : ''}>
+                                                    <div className="font-bold">{dmg}%</div>
+                                                    <div className="text-gray-500 truncate">{cell?.atk_move || ''}</div>
+                                                </td>;
+                                            })}
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+}
+
+/* ===== F5: Damage Calculator Page ===== */
+function DamageCalcPage({ format, myTeam }) {
+    const [attacker, setAttacker] = useState(null);
+    const [defender, setDefender] = useState(null);
+    const [defSearch, setDefSearch] = useState('');
+    const [defResults, setDefResults] = useState([]);
+    const [selectedMove, setSelectedMove] = useState('');
+    const [result, setResult] = useState(null);
+
+    const searchTimeout = useRef(null);
+    function searchDefender(q) {
+        setDefSearch(q);
+        clearTimeout(searchTimeout.current);
+        if (q.length < 2) { setDefResults([]); return; }
+        searchTimeout.current = setTimeout(async () => {
+            const res = await fetch(`${API}/pokemon/search?q=${encodeURIComponent(q)}`);
+            const data = await res.json();
+            setDefResults(data.results || []);
+        }, 300);
+    }
+
+    async function calculate() {
+        if (!attacker || !defender || !selectedMove) return;
+        try {
+            const res = await fetch(`${API}/battle/damage`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ format_id: format, attacker, defender, move: selectedMove }),
+            });
+            setResult(await res.json());
+        } catch {}
+    }
+
+    useEffect(() => { if (attacker && defender && selectedMove) calculate(); }, [attacker, defender, selectedMove]);
+
+    const t = myTeam.filter(Boolean);
+    const effColors = { super: 'text-green-400', double_super: 'text-green-300', resist: 'text-red-400', double_resist: 'text-red-300', immune: 'text-gray-500', neutral: 'text-gray-300' };
+    const effLabels = { super: 'Super effective!', double_super: '4x Super effective!', resist: 'Not very effective', double_resist: '4x Resisted', immune: 'No effect', neutral: 'Neutral' };
+
+    return (
+        <div className="space-y-4 fade-in">
+            <div className="grid grid-cols-3 gap-4">
+                {/* Attacker */}
+                <div className="retro-panel rounded-xl p-4">
+                    <div className="retro-panel-header">Attacker</div>
+                    {t.length > 0 && <div className="text-[9px] text-gray-500 mb-2">Pick from your team:</div>}
+                    <div className="flex gap-1 flex-wrap mb-2">
+                        {t.map((p, i) => (
+                            <div key={i} onClick={() => { setAttacker(p); setSelectedMove(''); setResult(null); }}
+                                 className={`cursor-pointer p-1 ${attacker?.species === p.species ? 'bg-accent/30 border border-accent' : 'hover:bg-dark-700'}`}>
+                                <PokemonSprite species={p.species} size={36} />
+                            </div>
+                        ))}
+                    </div>
+                    {attacker && (
+                        <div className="bg-dark-700 p-2">
+                            <div className="font-bold text-sm">{attacker.species}</div>
+                            {attacker.item && <div className="text-[9px] text-gray-400">@ {attacker.item}</div>}
+                            {attacker.ability && <div className="text-[9px] text-gray-400">{attacker.ability}</div>}
+                        </div>
+                    )}
+                </div>
+                {/* Move Selector + Result */}
+                <div className="retro-panel rounded-xl p-4">
+                    <div className="retro-panel-header">Move</div>
+                    {attacker && attacker.moves && attacker.moves.length > 0 ? (
+                        <div className="space-y-1 mb-3">
+                            {attacker.moves.filter(Boolean).map((m, i) => (
+                                <button key={i} onClick={() => setSelectedMove(m)}
+                                        className={`w-full text-left px-2 py-1.5 text-xs ${selectedMove === m ? 'bg-accent text-white font-bold' : 'bg-dark-700 hover:bg-dark-600 text-gray-300'}`}>
+                                    {m}
+                                </button>
+                            ))}
+                        </div>
+                    ) : <div className="text-xs text-gray-500">Select an attacker first</div>}
+
+                    {result && (
+                        <div className="mt-3 text-center fade-in">
+                            <div className="text-3xl font-bold text-white">{result.damage_pct}%</div>
+                            <div className="text-xs text-gray-400 mt-1">{result.min_roll}% - {result.max_roll}%</div>
+                            <div className={`text-sm font-bold mt-2 ${effColors[result.effectiveness] || 'text-gray-300'}`}>
+                                {effLabels[result.effectiveness] || result.effectiveness}
+                            </div>
+                            <div className="mt-2">
+                                {result.is_ohko ? <span className="text-xs px-2 py-0.5 bg-green-600 text-white font-bold">OHKO</span>
+                                    : result.is_2hko ? <span className="text-xs px-2 py-0.5 bg-yellow-600 text-white font-bold">2HKO</span>
+                                    : <span className="text-xs px-2 py-0.5 bg-red-800 text-white font-bold">3HKO+</span>}
+                            </div>
+                            {/* HP bar */}
+                            <div className="w-full bg-dark-700 h-4 mt-3 relative">
+                                <div className="h-4 bg-green-500" style={{width: `${Math.max(0, 100 - result.damage_pct)}%`}} />
+                                <div className="absolute inset-0 flex items-center justify-center text-[9px] font-bold text-white">
+                                    {Math.max(0, 100 - result.damage_pct).toFixed(0)}% HP remaining
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+                {/* Defender */}
+                <div className="retro-panel rounded-xl p-4">
+                    <div className="retro-panel-header">Defender</div>
+                    <input type="text" value={defSearch} onChange={e => searchDefender(e.target.value)}
+                           placeholder="Search defender..." className="w-full bg-dark-700 px-2 py-1 text-xs mb-2" />
+                    {defResults.length > 0 && !defender && (
+                        <div className="space-y-1 max-h-48 overflow-y-auto">
+                            {defResults.slice(0, 8).map((p, i) => (
+                                <div key={i} onClick={() => { setDefender(p); setDefResults([]); setDefSearch(p.name || p.species); }}
+                                     className="flex items-center gap-2 p-1 cursor-pointer hover:bg-dark-700">
+                                    <PokemonSprite species={p.name || p.id} size={24} />
+                                    <span className="text-xs">{p.name || p.id}</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                    {defender && (
+                        <div className="bg-dark-700 p-2">
+                            <div className="flex items-center gap-2">
+                                <PokemonSprite species={defender.species || defender.name || defender.id} size={48} />
+                                <div>
+                                    <div className="font-bold text-sm">{defender.species || defender.name || defender.id}</div>
+                                    <div className="flex gap-1 mt-0.5">
+                                        {(defender.types || []).map(t => <TypeBadge key={t} type={t} />)}
+                                    </div>
+                                </div>
+                            </div>
+                            <button onClick={() => { setDefender(null); setDefSearch(''); setResult(null); }} className="text-[9px] text-gray-500 mt-1">Change</button>
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+/* ===== F8: Team Compare Modal ===== */
+function CompareModal({ format, team1, team2, onClose }) {
+    const [data, setData] = useState(null);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        fetch(`${API}/team/compare`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ format_id: format, team1, team2 }),
+        }).then(r => r.json()).then(d => { setData(d); setLoading(false); })
+          .catch(() => setLoading(false));
+    }, []);
+
+    return (
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onClick={onClose}>
+            <div className="retro-panel rounded-xl p-6 max-w-3xl w-full max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                <div className="flex items-center justify-between mb-4">
+                    <h2 className="font-bold text-lg">Team Comparison</h2>
+                    <button onClick={onClose} className="text-gray-400 hover:text-white font-bold">X</button>
+                </div>
+                {loading ? <div className="text-center py-10"><div className="pokeball-spinner mx-auto" /></div> :
+                data ? (
+                    <div className="space-y-4">
+                        {/* Win Rates */}
+                        <div className="grid grid-cols-2 gap-4">
+                            <div className="text-center bg-dark-700 p-3">
+                                <div className="text-xs text-gray-500 mb-1">Team 1</div>
+                                <div className={`text-2xl font-bold ${(data.team1_wr||0) >= 50 ? 'text-green-400' : 'text-red-400'}`}>{data.team1_wr ?? '?'}%</div>
+                                <div className="text-[9px] text-accent mt-1">{data.team1_archetype}</div>
+                                <div className="flex gap-0.5 justify-center mt-2">{team1.map((p,i) => <PokemonSprite key={i} species={p.species} size={28} />)}</div>
+                            </div>
+                            <div className="text-center bg-dark-700 p-3">
+                                <div className="text-xs text-gray-500 mb-1">Team 2</div>
+                                <div className={`text-2xl font-bold ${(data.team2_wr||0) >= 50 ? 'text-green-400' : 'text-red-400'}`}>{data.team2_wr ?? '?'}%</div>
+                                <div className="text-[9px] text-accent mt-1">{data.team2_archetype}</div>
+                                <div className="flex gap-0.5 justify-center mt-2">{team2.map((p,i) => <PokemonSprite key={i} species={p.species} size={28} />)}</div>
+                            </div>
+                        </div>
+                        {data.wr_delta !== null && (
+                            <div className="text-center text-sm">
+                                Delta: <span className={`font-bold ${data.wr_delta > 0 ? 'text-green-400' : data.wr_delta < 0 ? 'text-red-400' : 'text-gray-400'}`}>
+                                    {data.wr_delta > 0 ? '+' : ''}{data.wr_delta}%
+                                </span>
+                            </div>
+                        )}
+                        {/* Coverage */}
+                        <div className="grid grid-cols-2 gap-4 text-xs">
+                            <div className="bg-dark-700 p-2">
+                                <div className="text-gray-500 mb-1">Team 1 Coverage Gaps</div>
+                                {data.team1_coverage?.uncovered?.length > 0 ? (
+                                    <div className="flex gap-1 flex-wrap">{data.team1_coverage.uncovered.map(t => <TypeBadge key={t} type={t} />)}</div>
+                                ) : <span className="text-green-400">Full coverage</span>}
+                            </div>
+                            <div className="bg-dark-700 p-2">
+                                <div className="text-gray-500 mb-1">Team 2 Coverage Gaps</div>
+                                {data.team2_coverage?.uncovered?.length > 0 ? (
+                                    <div className="flex gap-1 flex-wrap">{data.team2_coverage.uncovered.map(t => <TypeBadge key={t} type={t} />)}</div>
+                                ) : <span className="text-green-400">Full coverage</span>}
+                            </div>
+                        </div>
+                        {/* Shared / Unique */}
+                        <div className="text-xs">
+                            {data.shared_pokemon?.length > 0 && (
+                                <div className="mb-2">Shared: <span className="text-yellow-400">{data.shared_pokemon.join(', ')}</span></div>
+                            )}
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>Only in T1: <span className="text-accent2">{data.unique_to_team1?.join(', ') || 'None'}</span></div>
+                                <div>Only in T2: <span className="text-accent2">{data.unique_to_team2?.join(', ') || 'None'}</span></div>
+                            </div>
+                        </div>
+                    </div>
+                ) : <div className="text-gray-500 text-center">Failed to load comparison</div>}
+            </div>
+        </div>
+    );
+}
+
+/* ===== F9: Tier List Page ===== */
+function TierListPage({ format, onNavigateFormat }) {
+    const [data, setData] = useState(null);
+    const [loading, setLoading] = useState(true);
+    const [sortBy, setSortBy] = useState('total');
+
+    useEffect(() => {
+        fetch(`${API}/formats/tier-list`).then(r => r.json()).then(d => { setData(d); setLoading(false); })
+            .catch(() => setLoading(false));
+    }, []);
+
+    if (loading) return <div className="flex items-center justify-center py-20"><div className="pokeball-spinner" /></div>;
+    if (!data || !data.pokemon?.length) return <div className="text-center text-gray-400 py-10">No tier list data</div>;
+
+    const fmts = data.formats || [];
+    const pokemon = [...data.pokemon].sort((a, b) => {
+        if (sortBy === 'total') return b.total_usage - a.total_usage;
+        return (b.usage[sortBy] || 0) - (a.usage[sortBy] || 0);
+    });
+
+    const maxUsage = Math.max(...pokemon.flatMap(p => Object.values(p.usage)));
+
+    return (
+        <div className="space-y-4 fade-in">
+            <div className="retro-panel rounded-xl p-4">
+                <div className="retro-panel-header">Cross-Format Tier List</div>
+                <div className="text-xs text-gray-500 mb-2">Click a cell to navigate to that format. Click column headers to sort.</div>
+                <div className="overflow-x-auto">
+                    <table className="w-full text-[9px]">
+                        <thead>
+                            <tr>
+                                <th className="p-1 text-left sticky left-0 bg-dark-800 cursor-pointer" onClick={() => setSortBy('total')}>
+                                    Pokemon {sortBy === 'total' && '\u25BC'}
+                                </th>
+                                {fmts.map(f => (
+                                    <th key={f} className="p-1 cursor-pointer hover:text-accent writing-mode-vertical" style={{writingMode:'vertical-rl', maxWidth: 30}}
+                                        onClick={() => setSortBy(f)}>
+                                        {prettyName(f)} {sortBy === f && '\u25BC'}
+                                    </th>
+                                ))}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {pokemon.map((p, i) => (
+                                <tr key={i} className="hover:bg-dark-700">
+                                    <td className="p-1 sticky left-0 bg-dark-800">
+                                        <div className="flex items-center gap-1">
+                                            <PokemonSprite species={p.species} size={20} />
+                                            <span className="truncate">{p.species}</span>
+                                        </div>
+                                    </td>
+                                    {fmts.map(f => {
+                                        const val = p.usage[f] || 0;
+                                        const intensity = val > 0 ? Math.min(val / maxUsage, 1) : 0;
+                                        const bg = val > 0
+                                            ? `rgba(${Math.round(230 * intensity)}, ${Math.round(57 * intensity + 80 * (1-intensity))}, ${Math.round(70 * (1-intensity) + 70 * intensity)}, ${0.2 + intensity * 0.6})`
+                                            : 'transparent';
+                                        return (
+                                            <td key={f} className="p-1 text-center cursor-pointer" style={{background: bg}}
+                                                onClick={() => onNavigateFormat && onNavigateFormat(f)}>
+                                                {val > 0 ? (val * 100).toFixed(1) : ''}
+                                            </td>
+                                        );
+                                    })}
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 function prettyName(fmtId) {
     const m = fmtId.match(/^gen(\d+)(.*)/);
     if (!m) return fmtId;
@@ -1060,6 +1708,8 @@ function App() {
     const [searching, setSearching] = useState(false);
     const [autoAnalyze, setAutoAnalyze] = useState(false);
     const [notification, setNotification] = useState(null);
+    const [selectedSlot, setSelectedSlot] = useState(null);
+    const [compareTeams, setCompareTeams] = useState(null);
     const [darkMode, setDarkMode] = useState(() => {
         const saved = localStorage.getItem('retro-dark-mode');
         return saved !== null ? saved === 'true' : true;
@@ -1074,6 +1724,37 @@ function App() {
 
     useEffect(() => {
         fetch(`${API}/formats`).then(r => r.json()).then(d => setFormats(d.formats || [])).catch(() => {});
+    }, []);
+
+    // F4: URL hash team sharing — decode on load
+    useEffect(() => {
+        try {
+            const hash = window.location.hash;
+            if (hash && hash.includes('team=')) {
+                const params = new URLSearchParams(hash.slice(1));
+                const b64 = params.get('team');
+                const fmt = params.get('fmt');
+                if (b64) {
+                    const decoded = atob(b64);
+                    const mons = decoded.split('||').map(block => {
+                        const [species, item, ability, nature, movesStr, evsStr] = block.split('|');
+                        const moves = movesStr ? movesStr.split(',') : [];
+                        const evObj = {};
+                        if (evsStr) {
+                            const evParts = evsStr.split('.');
+                            const evNames = ['hp','atk','def','spa','spd','spe'];
+                            evParts.forEach((v, i) => { if (+v > 0 && evNames[i]) evObj[evNames[i]] = +v; });
+                        }
+                        return { species: species || '', item: item || '', ability: ability || '', nature: nature || '', moves, evs: evObj };
+                    });
+                    const newTeam = mons.slice(0, 6);
+                    while (newTeam.length < 6) newTeam.push(null);
+                    setTeam(newTeam);
+                    if (fmt) setFormat(fmt);
+                    window.location.hash = '';
+                }
+            }
+        } catch {}
     }, []);
 
     const searchTimeout = useRef(null);
@@ -1104,11 +1785,11 @@ function App() {
 
     function removeFromTeam(idx) {
         setTeam(prev => { const next = [...prev]; next[idx] = null; return next; });
+        if (selectedSlot === idx) setSelectedSlot(null);
     }
 
     function handleTeamsGenerated(teams) {
         setGeneratedTeams(teams);
-        // Don't auto-select — left column stays blank until user picks a team
     }
 
     function selectGeneratedTeam(pokemon) {
@@ -1126,6 +1807,29 @@ function App() {
 
     function handleAnalysisResult(data) {
         setAutoAnalyze(false);
+    }
+
+    // F2: Slot replacement handler
+    function handleSlotReplace(slotIdx, suggestion) {
+        setTeam(prev => {
+            const next = [...prev];
+            next[slotIdx] = { species: suggestion.species, moves: [], ability: '', item: '' };
+            return next;
+        });
+    }
+
+    // F4: Share team via URL
+    function shareTeam() {
+        const filled = team.filter(Boolean);
+        if (filled.length === 0) return;
+        const encoded = filled.map(p => {
+            const evStr = p.evs ? ['hp','atk','def','spa','spd','spe'].map(s => p.evs[s] || 0).join('.') : '';
+            return [p.species || '', p.item || '', p.ability || '', p.nature || '', (p.moves || []).join(','), evStr].join('|');
+        }).join('||');
+        const b64 = btoa(encoded);
+        const url = `${window.location.origin}${window.location.pathname}#team=${b64}&fmt=${format}`;
+        navigator.clipboard.writeText(url).then(() => showNotification('Share URL copied!', 'success'))
+            .catch(() => showNotification('Failed to copy', 'error'));
     }
 
     const [savedVersion, setSavedVersion] = useState(0);
@@ -1160,12 +1864,20 @@ function App() {
         setTeam(newTeam);
     }
 
+    function handleMetaLoadTeam(teamData) {
+        const newTeam = teamData.slice(0, 6);
+        while (newTeam.length < 6) newTeam.push(null);
+        setTeam(newTeam);
+        setPage('builder');
+    }
+
     function showNotification(msg, type = 'error') {
         setNotification({ msg, type });
         setTimeout(() => setNotification(null), 5000);
     }
 
     const filledTeam = team.filter(Boolean);
+    const selectedPokemon = selectedSlot !== null && team[selectedSlot] ? team[selectedSlot] : null;
 
     return (
         <div className="min-h-screen">
@@ -1178,18 +1890,22 @@ function App() {
                         </div>
                         <h1 className="pixel-font text-sm text-white">FutureSight<span className="text-accent">ML</span></h1>
                     </div>
-                    <nav className="flex items-center gap-4">
-                        <button onClick={() => setPage('builder')}
-                                className={`text-sm font-semibold px-3 py-1 rounded ${page === 'builder' ? 'bg-accent text-white' : 'text-gray-400 hover:text-white'}`}>
-                            Team Builder
-                        </button>
-                        <button onClick={() => setPage('meta')}
-                                className={`text-sm font-semibold px-3 py-1 rounded ${page === 'meta' ? 'bg-accent text-white' : 'text-gray-400 hover:text-white'}`}>
-                            Meta Analysis
-                        </button>
+                    <nav className="flex items-center gap-2">
+                        {[
+                            ['builder', 'Builder'],
+                            ['meta', 'Meta'],
+                            ['h2h', 'H2H'],
+                            ['dmgcalc', 'Damage'],
+                            ['tierlist', 'Tiers'],
+                        ].map(([id, label]) => (
+                            <button key={id} onClick={() => setPage(id)}
+                                    className={`text-[10px] font-semibold px-2 py-1 ${page === id ? 'bg-accent text-white' : 'text-gray-400 hover:text-white'}`}>
+                                {label}
+                            </button>
+                        ))}
                         <select value={format} onChange={e => setFormat(e.target.value)}
                                 className="bg-dark-700 text-sm rounded px-3 py-2 text-gray-200 border border-gray-600 cursor-pointer appearance-auto"
-                                style={{minWidth: '200px', position: 'relative', zIndex: 100}}>
+                                style={{minWidth: '180px', position: 'relative', zIndex: 100}}>
                             {(() => {
                                 const grouped = {};
                                 formats.forEach(f => {
@@ -1221,6 +1937,12 @@ function App() {
                 </div>
             )}
 
+            {/* Compare modal */}
+            {compareTeams && (
+                <CompareModal format={format} team1={compareTeams[0]} team2={compareTeams[1]}
+                    onClose={() => setCompareTeams(null)} />
+            )}
+
             <main className="max-w-7xl mx-auto px-4 py-6">
                 {page === 'builder' && (
                     <div className="grid grid-cols-12 gap-4">
@@ -1228,22 +1950,35 @@ function App() {
                         <div className="col-span-12 lg:col-span-3 space-y-3">
                             <div className="flex items-center justify-between mb-2">
                                 <h2 className="font-bold text-lg">Your Team ({filledTeam.length}/6)</h2>
-                                {filledTeam.length > 0 && (
-                                    <button onClick={saveCurrentTeam}
-                                            className="text-[10px] px-3 py-1 bg-gold text-black font-bold hover:bg-yellow-400 border-2 border-yellow-700">
-                                        SAVE
-                                    </button>
-                                )}
+                                <div className="flex gap-1">
+                                    {filledTeam.length > 0 && (
+                                        <button onClick={shareTeam}
+                                                className="text-[10px] px-2 py-1 bg-accent2 text-white font-bold hover:bg-blue-700 border-2 border-blue-900"
+                                                title="Copy shareable URL">
+                                            SHARE
+                                        </button>
+                                    )}
+                                    {filledTeam.length > 0 && (
+                                        <button onClick={saveCurrentTeam}
+                                                className="text-[10px] px-3 py-1 bg-gold text-black font-bold hover:bg-yellow-400 border-2 border-yellow-700">
+                                            SAVE
+                                        </button>
+                                    )}
+                                </div>
                             </div>
 
                             <div className="space-y-2">
-                                {team.map((p, i) => <TeamSlot key={i} pokemon={p} index={i} onRemove={removeFromTeam} gen={gen} />)}
+                                {team.map((p, i) => <TeamSlot key={i} pokemon={p} index={i} onRemove={removeFromTeam} gen={gen}
+                                    onClick={idx => setSelectedSlot(selectedSlot === idx ? null : idx)}
+                                    isSelected={selectedSlot === i}
+                                    team={team} format={format} onReplace={handleSlotReplace} />)}
                             </div>
                             {filledTeam.length > 0 && <EvaluationPanel team={filledTeam} format={format} onEvaluated={setLastWinrate} />}
                             {filledTeam.length > 0 && (
                                 <AnalysisPanel team={filledTeam} format={format} autoRun={autoAnalyze} onAnalysisResult={handleAnalysisResult} />
                             )}
-                            <SavedTeamsPanel format={format} onLoad={loadSavedTeam} version={savedVersion} />
+                            <SavedTeamsPanel format={format} onLoad={loadSavedTeam} version={savedVersion}
+                                onCompare={(t1, t2) => setCompareTeams([t1, t2])} />
                             <ImportExportPanel team={filledTeam} format={format} onImport={handleImport} />
                         </div>
 
@@ -1267,7 +2002,7 @@ function App() {
                             </div>
                         </div>
 
-                        {/* Right: Pool / Info */}
+                        {/* Right: Info + Usage + Counters */}
                         <div className="col-span-12 lg:col-span-3 space-y-4">
                             <div className="retro-panel rounded-xl p-4">
                                 <h3 className="font-bold mb-2">Format Info</h3>
@@ -1284,11 +2019,16 @@ function App() {
                                     )}
                                 </div>
                             </div>
+                            <UsageStatsPanel format={format} />
+                            <CounterPanel pokemon={selectedPokemon} format={format} />
                         </div>
                     </div>
                 )}
 
-                {page === 'meta' && <MetaPage format={format} />}
+                {page === 'meta' && <MetaPage format={format} onLoadTeam={handleMetaLoadTeam} />}
+                {page === 'h2h' && <HeadToHeadPage format={format} myTeam={team} />}
+                {page === 'dmgcalc' && <DamageCalcPage format={format} myTeam={team} />}
+                {page === 'tierlist' && <TierListPage format={format} onNavigateFormat={(f) => { setFormat(f); setPage('meta'); }} />}
             </main>
         </div>
     );

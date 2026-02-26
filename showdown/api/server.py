@@ -77,6 +77,7 @@ class PokemonSet(BaseModel):
     moves: list[str] = Field(default_factory=list)
     tera_type: str | None = ""
     evs: dict[str, int] | None = Field(default_factory=dict)
+    ivs: dict[str, int] | None = Field(default_factory=dict)
     nature: str | None = ""
     level: int | None = 100
 
@@ -113,6 +114,37 @@ class SimulateRequest(BaseModel):
 class ImportRequest(BaseModel):
     format_id: str = "gen9ou"
     paste: str
+
+
+class HeadToHeadRequest(BaseModel):
+    format_id: str = "gen9ou"
+    team1: list[PokemonSet]
+    team2: list[PokemonSet]
+
+
+class DamageCalcRequest(BaseModel):
+    format_id: str = "gen9ou"
+    attacker: PokemonSet
+    defender: PokemonSet
+    move: str
+
+
+class CounterRequest(BaseModel):
+    format_id: str = "gen9ou"
+    pokemon: PokemonSet
+    n: int = 10
+
+
+class SlotSuggestionRequest(BaseModel):
+    format_id: str = "gen9ou"
+    team: list[PokemonSet]
+    slot_idx: int
+
+
+class CompareRequest(BaseModel):
+    format_id: str = "gen9ou"
+    team1: list[PokemonSet]
+    team2: list[PokemonSet]
 
 
 # ---------------------------------------------------------------------------
@@ -635,6 +667,336 @@ async def full_analysis(req: EvaluateRequest):
 
 
 # ---------------------------------------------------------------------------
+# Routes: Community Features
+# ---------------------------------------------------------------------------
+
+@app.post("/api/team/head-to-head")
+async def head_to_head(req: HeadToHeadRequest):
+    """Compute pairwise matchup matrix and win probability between two teams."""
+    fmt = req.format_id
+    analyzer = TeamAnalyzer(pokemon_data=app_state.pkmn_data)
+    team1 = [p.model_dump() for p in req.team1]
+    team2 = [p.model_dump() for p in req.team2]
+
+    gen = extract_gen(fmt)
+    from ..data.features import FeatureExtractor
+    fe = FeatureExtractor(app_state.pkmn_data, gen=gen)
+    matrix = analyzer.pairwise_matchup_matrix(team1, team2, feature_extractor=fe)
+
+    # Win probability if model available
+    win_prob = None
+    if fmt in app_state.formats:
+        fs = app_state.formats[fmt]
+        battle = {"team1": team1, "team2": team2, "winner": 0}
+        pred = fs.ensemble.predict_battle(battle)
+        win_prob = {
+            "team1_win_prob": round(pred["ensemble"] * 100, 2),
+            "team2_win_prob": round((1 - pred["ensemble"]) * 100, 2),
+        }
+
+    return {
+        "format": fmt,
+        "matchup_matrix": matrix,
+        "win_probability": win_prob,
+    }
+
+
+@app.post("/api/battle/damage")
+async def damage_calc(req: DamageCalcRequest):
+    """Calculate damage for a specific move from attacker to defender."""
+    if not app_state.pkmn_data:
+        raise HTTPException(500, "Pokemon data not loaded")
+
+    import re
+    gen = extract_gen(req.format_id)
+    from ..data.features import FeatureExtractor
+    from ..data.damage_calc import estimate_damage_pct as _est_dmg
+
+    fe = FeatureExtractor(app_state.pkmn_data, gen=gen)
+    atk = [req.attacker.model_dump()]
+    dfn = [req.defender.model_dump()]
+    atk_data = fe.precompute_team_data(atk)
+    def_data = fe.precompute_team_data(dfn)
+
+    if not atk_data or not def_data:
+        raise HTTPException(400, "Could not process Pokemon data")
+
+    atk_pre = atk_data[0]
+    def_pre = def_data[0]
+
+    # Find the requested move
+    move_id = re.sub(r"[^a-z0-9]", "", req.move.lower())
+    move_data = None
+    for md in atk_pre.get("moves_data", []):
+        md_id = re.sub(r"[^a-z0-9]", "", md.get("name", "").lower())
+        if md_id == move_id:
+            move_data = md
+            break
+
+    if not move_data:
+        # Try looking up from pokemon data
+        if move_id in app_state.pkmn_data.moves:
+            raw = app_state.pkmn_data.moves[move_id]
+            move_data = {
+                "name": raw.get("name", req.move),
+                "basePower": raw.get("basePower", 0),
+                "category": raw.get("category", "Status"),
+                "type": raw.get("type", "Normal"),
+                "flags": raw.get("flags", {}),
+                "secondary": raw.get("secondary"),
+                "overrideOffensiveStat": None,
+                "overrideOffensivePokemon": None,
+                "overrideDefensiveStat": None,
+            }
+
+    if not move_data or move_data.get("category") == "Status":
+        return {
+            "damage_pct": 0.0, "min_roll": 0.0, "max_roll": 0.0,
+            "is_ohko": False, "is_2hko": False, "move_type": move_data.get("type", "") if move_data else "",
+            "effectiveness": "neutral",
+        }
+
+    dmg = _est_dmg(atk_pre, def_pre, move_data)
+    dmg_pct = round(float(dmg * 100), 1)
+    min_roll = round(float(dmg * 0.85 * 100), 1)
+    max_roll = round(float(dmg * 100), 1)
+
+    # Type effectiveness
+    from ..utils.constants import type_effectiveness_against
+    def_types = def_pre.get("types", [])
+    move_type = move_data.get("type", "Normal")
+    eff = type_effectiveness_against(move_type, def_types) if def_types else 1.0
+    eff_label = "neutral"
+    if eff >= 4.0:
+        eff_label = "double_super"
+    elif eff >= 2.0:
+        eff_label = "super"
+    elif eff == 0:
+        eff_label = "immune"
+    elif eff <= 0.25:
+        eff_label = "double_resist"
+    elif eff < 1.0:
+        eff_label = "resist"
+
+    return {
+        "damage_pct": dmg_pct,
+        "min_roll": min_roll,
+        "max_roll": max_roll,
+        "is_ohko": min_roll >= 100.0,
+        "is_2hko": min_roll >= 50.0,
+        "move_type": move_type,
+        "move_name": move_data.get("name", req.move),
+        "effectiveness": eff_label,
+        "effectiveness_mult": float(eff),
+    }
+
+
+@app.post("/api/team/counters")
+async def find_counters(req: CounterRequest):
+    """Find counters and checks for a Pokemon from the format's pool."""
+    fmt = req.format_id
+    if fmt not in app_state.formats:
+        raise HTTPException(404, f"Format '{fmt}' not loaded")
+
+    fs = app_state.formats[fmt]
+    gen = extract_gen(fmt)
+    from ..data.features import FeatureExtractor
+    fe = FeatureExtractor(app_state.pkmn_data, gen=gen)
+
+    analyzer = TeamAnalyzer(pokemon_data=app_state.pkmn_data)
+    target = req.pokemon.model_dump()
+
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None, analyzer.find_counters, target, fs.pokemon_pool, req.n, fe,
+    )
+
+    return {"format": fmt, "target": target.get("species", ""), **result}
+
+
+@app.post("/api/team/suggest-slot")
+async def suggest_slot(req: SlotSuggestionRequest):
+    """Suggest replacement Pokemon for a specific team slot."""
+    fmt = req.format_id
+    if fmt not in app_state.formats:
+        raise HTTPException(404, f"Format '{fmt}' not loaded")
+
+    fs = app_state.formats[fmt]
+    if not fs.meta_teams:
+        raise HTTPException(400, "No meta teams available for evaluation")
+
+    team = [p.model_dump() for p in req.team]
+    evaluator = TeamEvaluator(
+        predictor=fs.ensemble,
+        meta_teams=fs.meta_teams,
+        fast_mode=True,
+    )
+    analyzer = TeamAnalyzer(pokemon_data=app_state.pkmn_data)
+
+    loop = asyncio.get_event_loop()
+    results = await loop.run_in_executor(
+        None, analyzer.suggest_slot_replacement,
+        team, req.slot_idx, fs.pokemon_pool, evaluator, fs.meta_teams,
+    )
+
+    return {"format": fmt, "slot_idx": req.slot_idx, "suggestions": results}
+
+
+@app.post("/api/team/compare")
+async def compare_teams(req: CompareRequest):
+    """Compare two teams side by side."""
+    fmt = req.format_id
+    analyzer = TeamAnalyzer(pokemon_data=app_state.pkmn_data)
+    team1 = [p.model_dump() for p in req.team1]
+    team2 = [p.model_dump() for p in req.team2]
+
+    cov1 = analyzer.coverage_analysis(team1)
+    cov2 = analyzer.coverage_analysis(team2)
+    speed1 = analyzer.speed_tier_analysis(team1)
+    speed2 = analyzer.speed_tier_analysis(team2)
+    arch1 = analyzer.detect_archetype(team1)
+    arch2 = analyzer.detect_archetype(team2)
+
+    # Win rates if model available
+    wr1 = wr2 = None
+    if fmt in app_state.formats:
+        fs = app_state.formats[fmt]
+        if fs.meta_teams:
+            evaluator = TeamEvaluator(predictor=fs.ensemble, meta_teams=fs.meta_teams)
+            d1 = evaluator.evaluate_detailed(team1)
+            d2 = evaluator.evaluate_detailed(team2)
+            wr1 = round(d1["overall_winrate"] * 100, 2)
+            wr2 = round(d2["overall_winrate"] * 100, 2)
+
+    # Shared / unique Pokemon
+    sp1 = {p.get("species", "") for p in team1 if p}
+    sp2 = {p.get("species", "") for p in team2 if p}
+    shared = list(sp1 & sp2)
+    unique1 = list(sp1 - sp2)
+    unique2 = list(sp2 - sp1)
+
+    return {
+        "format": fmt,
+        "team1_wr": wr1,
+        "team2_wr": wr2,
+        "wr_delta": round(wr1 - wr2, 2) if wr1 is not None and wr2 is not None else None,
+        "team1_archetype": arch1.get("archetype", ""),
+        "team2_archetype": arch2.get("archetype", ""),
+        "team1_coverage": {
+            "uncovered": cov1.get("uncovered_types", []),
+            "unresisted": cov1.get("unresisted_types", []),
+        },
+        "team2_coverage": {
+            "uncovered": cov2.get("uncovered_types", []),
+            "unresisted": cov2.get("unresisted_types", []),
+        },
+        "shared_pokemon": shared,
+        "unique_to_team1": unique1,
+        "unique_to_team2": unique2,
+        "team1_speed": [{"species": s["species"], "max_speed": s["max_speed"]} for s in speed1],
+        "team2_speed": [{"species": s["species"], "max_speed": s["max_speed"]} for s in speed2],
+    }
+
+
+@app.get("/api/meta/{format_id}/pokemon/{species}")
+async def get_species_usage(format_id: str, species: str):
+    """Get all sets for a specific species in a format's pool."""
+    if format_id not in app_state.formats:
+        raise HTTPException(404, f"Format '{format_id}' not loaded")
+
+    import re
+    fs = app_state.formats[format_id]
+    pid = re.sub(r"[^a-z0-9]", "", species.lower())
+
+    sets = [p for p in fs.pokemon_pool
+            if re.sub(r"[^a-z0-9]", "", p.get("species", "").lower()) == pid]
+
+    # Aggregate move/item/ability usage
+    move_counts = {}
+    item_counts = {}
+    ability_counts = {}
+    for s in sets:
+        for m in s.get("moves", []):
+            if m:
+                move_counts[m] = move_counts.get(m, 0) + 1
+        itm = s.get("item", "")
+        if itm:
+            item_counts[itm] = item_counts.get(itm, 0) + 1
+        abl = s.get("ability", "")
+        if abl:
+            ability_counts[abl] = ability_counts.get(abl, 0) + 1
+
+    total = max(len(sets), 1)
+    top_moves = sorted(move_counts.items(), key=lambda x: -x[1])[:10]
+    top_items = sorted(item_counts.items(), key=lambda x: -x[1])[:5]
+    top_abilities = sorted(ability_counts.items(), key=lambda x: -x[1])[:5]
+
+    return {
+        "format": format_id,
+        "species": species,
+        "total_sets": len(sets),
+        "top_moves": [{"name": m, "count": c, "pct": round(c / total * 100, 1)} for m, c in top_moves],
+        "top_items": [{"name": i, "count": c, "pct": round(c / total * 100, 1)} for i, c in top_items],
+        "top_abilities": [{"name": a, "count": c, "pct": round(c / total * 100, 1)} for a, c in top_abilities],
+        "sets": sets[:10],
+    }
+
+
+@app.get("/api/formats/tier-list")
+async def formats_tier_list():
+    """Get cross-format usage data for a tier list heatmap."""
+    import re
+
+    format_data = {}
+    pokemon_usage = {}  # species -> {format: pct}
+
+    for fmt_id, fs in app_state.formats.items():
+        if not fs.pokemon_pool:
+            continue
+
+        species_count = {}
+        for p in fs.pokemon_pool:
+            sp = p.get("species", "")
+            if sp:
+                species_count[sp] = species_count.get(sp, 0) + 1
+
+        total = sum(species_count.values())
+        if total == 0:
+            continue
+
+        top20 = sorted(species_count.items(), key=lambda x: -x[1])[:20]
+        format_data[fmt_id] = {
+            "total_sets": total,
+            "top_pokemon": [s for s, _ in top20],
+        }
+
+        for sp, count in top20:
+            if sp not in pokemon_usage:
+                pokemon_usage[sp] = {}
+            pokemon_usage[sp][fmt_id] = round(count / total, 4)
+
+    # Rank by total cross-format presence
+    ranked = sorted(
+        pokemon_usage.items(),
+        key=lambda x: sum(x[1].values()),
+        reverse=True,
+    )[:30]
+
+    return {
+        "formats": list(format_data.keys()),
+        "pokemon": [
+            {
+                "species": sp,
+                "sprite": _sprite_url(sp),
+                "usage": usage,
+                "total_usage": round(sum(usage.values()), 4),
+            }
+            for sp, usage in ranked
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -691,7 +1053,7 @@ def _parse_showdown_paste(paste: str) -> list[dict]:
 
         if current is None:
             current = {"species": "", "ability": "", "item": "", "moves": [],
-                       "evs": {}, "nature": "", "tera_type": ""}
+                       "evs": {}, "ivs": {}, "nature": "", "tera_type": ""}
             # First line: "Pokemon @ Item" or "Nickname (Pokemon) @ Item"
             if " @ " in line:
                 parts = line.split(" @ ", 1)
@@ -722,6 +1084,16 @@ def _parse_showdown_paste(paste: str) -> list[dict]:
                                 "SpA": "spa", "SpD": "spd", "Spe": "spe"}
                     if stat in stat_map:
                         current["evs"][stat_map[stat]] = int(val.strip())
+        elif line.startswith("IVs:"):
+            iv_str = line.split(":", 1)[1].strip()
+            for part in iv_str.split("/"):
+                part = part.strip()
+                if " " in part:
+                    val, stat = part.rsplit(" ", 1)
+                    stat_map = {"HP": "hp", "Atk": "atk", "Def": "def",
+                                "SpA": "spa", "SpD": "spd", "Spe": "spe"}
+                    if stat in stat_map:
+                        current["ivs"][stat_map[stat]] = int(val.strip())
         elif line.endswith("Nature"):
             current["nature"] = line.replace("Nature", "").strip()
         elif line.startswith("- "):
@@ -756,6 +1128,17 @@ def _team_to_showdown_paste(team: list[PokemonSet]) -> str:
                     ev_parts.append(f"{val} {stat_names[stat]}")
             if ev_parts:
                 lines.append(f"EVs: {' / '.join(ev_parts)}")
+        # IVs — only show when non-default (not all 31)
+        ivs = getattr(p, 'ivs', None)
+        if ivs and isinstance(ivs, dict):
+            stat_names_iv = {"hp": "HP", "atk": "Atk", "def": "Def",
+                             "spa": "SpA", "spd": "SpD", "spe": "Spe"}
+            iv_parts = []
+            for stat, val in ivs.items():
+                if val is not None and val != 31 and stat in stat_names_iv:
+                    iv_parts.append(f"{val} {stat_names_iv[stat]}")
+            if iv_parts:
+                lines.append(f"IVs: {' / '.join(iv_parts)}")
         if p.nature:
             lines.append(f"{p.nature} Nature")
         for move in p.moves:

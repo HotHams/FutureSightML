@@ -10,7 +10,9 @@ from ..utils.constants import (
     TYPES, TYPE_TO_IDX, NUM_TYPES, STAT_NAMES, NATURES,
     type_effectiveness_against, calc_stat,
     IV_DEFAULT, EV_MAX_SINGLE, LEVEL_100,
+    extract_gen,
 )
+from ..data.damage_calc import estimate_damage_pct, estimate_best_move_damage
 
 log = logging.getLogger("showdown.teambuilder.analysis")
 
@@ -946,6 +948,222 @@ class TeamAnalyzer:
             parts.append(f"Close out games with {' or '.join(closer_names)}.")
 
         return " ".join(parts)
+
+    # ------------------------------------------------------------------
+    # Pairwise Matchup Matrix (Head-to-Head)
+    # ------------------------------------------------------------------
+
+    def pairwise_matchup_matrix(
+        self, team1: list[dict], team2: list[dict], feature_extractor=None
+    ) -> list[dict]:
+        """Compute 6x6 damage grid between two teams.
+
+        For each (attacker, defender) pair, finds the best move and estimated
+        damage %.  Returns a flat list of matchup entries.
+
+        Args:
+            team1: Attacker team (list of PokemonSet dicts).
+            team2: Defender team (list of PokemonSet dicts).
+            feature_extractor: Optional FeatureExtractor with precompute_team_data.
+
+        Returns:
+            List of dicts with keys: atk, def_, atk_move, atk_dmg, def_move, def_dmg.
+        """
+        if feature_extractor is None:
+            from ..data.features import FeatureExtractor
+            feature_extractor = FeatureExtractor(self.pokemon_data)
+
+        t1_data = feature_extractor.precompute_team_data(team1)
+        t2_data = feature_extractor.precompute_team_data(team2)
+
+        results = []
+        for i, (atk_set, atk_pre) in enumerate(zip(team1, t1_data)):
+            for j, (def_set, def_pre) in enumerate(zip(team2, t2_data)):
+                # Best move from attacker -> defender
+                atk_best_dmg = 0.0
+                atk_best_move = ""
+                for md in atk_pre.get("moves_data", []):
+                    if md.get("category") == "Status":
+                        continue
+                    dmg = estimate_damage_pct(atk_pre, def_pre, md)
+                    if dmg > atk_best_dmg:
+                        atk_best_dmg = dmg
+                        atk_best_move = md.get("name", "")
+
+                # Best move from defender -> attacker
+                def_best_dmg = 0.0
+                def_best_move = ""
+                for md in def_pre.get("moves_data", []):
+                    if md.get("category") == "Status":
+                        continue
+                    dmg = estimate_damage_pct(def_pre, atk_pre, md)
+                    if dmg > def_best_dmg:
+                        def_best_dmg = dmg
+                        def_best_move = md.get("name", "")
+
+                results.append({
+                    "atk": atk_set.get("species", f"Mon {i+1}"),
+                    "def_": def_set.get("species", f"Mon {j+1}"),
+                    "atk_move": atk_best_move,
+                    "atk_dmg": round(float(atk_best_dmg * 100), 1),
+                    "def_move": def_best_move,
+                    "def_dmg": round(float(def_best_dmg * 100), 1),
+                })
+        return results
+
+    # ------------------------------------------------------------------
+    # Counter / Check Finder
+    # ------------------------------------------------------------------
+
+    def find_counters(
+        self, target: dict, pokemon_pool: list[dict], n: int = 10,
+        feature_extractor=None,
+    ) -> dict[str, list[dict]]:
+        """Find counters and checks for a target Pokemon from the pool.
+
+        Counter: takes < 33% from target AND deals > 40% to target.
+        Check: deals > 50% to target (threatens KO but may not switch in safely).
+
+        Returns dict with 'counters' and 'checks' lists.
+        """
+        if feature_extractor is None:
+            from ..data.features import FeatureExtractor
+            feature_extractor = FeatureExtractor(self.pokemon_data)
+
+        target_data = feature_extractor.precompute_team_data([target])
+        if not target_data:
+            return {"counters": [], "checks": []}
+        target_pre = target_data[0]
+
+        # Deduplicate pool by species
+        seen = set()
+        candidates = []
+        for p in pokemon_pool:
+            sp = _to_id(p.get("species", ""))
+            if sp and sp not in seen:
+                seen.add(sp)
+                candidates.append(p)
+
+        scored = []
+        for cand in candidates:
+            cand_data = feature_extractor.precompute_team_data([cand])
+            if not cand_data:
+                continue
+            cand_pre = cand_data[0]
+
+            dmg_to_target = estimate_best_move_damage(cand_pre, target_pre)
+            dmg_from_target = estimate_best_move_damage(target_pre, cand_pre)
+
+            # Find best move names
+            best_move_to = ""
+            best_val = 0.0
+            for md in cand_pre.get("moves_data", []):
+                if md.get("category") == "Status":
+                    continue
+                d = estimate_damage_pct(cand_pre, target_pre, md)
+                if d > best_val:
+                    best_val = d
+                    best_move_to = md.get("name", "")
+
+            scored.append({
+                "species": cand.get("species", ""),
+                "dmg_to_target": float(dmg_to_target),
+                "dmg_from_target": float(dmg_from_target),
+                "best_move": best_move_to,
+            })
+
+        counters = []
+        checks = []
+        for s in scored:
+            if s["dmg_from_target"] < 0.33 and s["dmg_to_target"] > 0.40:
+                counters.append({
+                    "species": s["species"],
+                    "best_move": s["best_move"],
+                    "dmg_to_target": round(s["dmg_to_target"] * 100, 1),
+                    "dmg_from_target": round(s["dmg_from_target"] * 100, 1),
+                    "sprite": f"https://play.pokemonshowdown.com/sprites/gen5/{_to_id(s['species'])}.png",
+                })
+            elif s["dmg_to_target"] > 0.50:
+                checks.append({
+                    "species": s["species"],
+                    "best_move": s["best_move"],
+                    "dmg_to_target": round(s["dmg_to_target"] * 100, 1),
+                    "dmg_from_target": round(s["dmg_from_target"] * 100, 1),
+                    "sprite": f"https://play.pokemonshowdown.com/sprites/gen5/{_to_id(s['species'])}.png",
+                })
+
+        # Sort counters by dmg_to_target desc, checks by dmg_to_target desc
+        counters.sort(key=lambda x: -x["dmg_to_target"])
+        checks.sort(key=lambda x: -x["dmg_to_target"])
+
+        return {
+            "counters": counters[:n],
+            "checks": checks[:n],
+        }
+
+    # ------------------------------------------------------------------
+    # Slot Replacement Suggestions
+    # ------------------------------------------------------------------
+
+    def suggest_slot_replacement(
+        self, team: list[dict], slot_idx: int,
+        pool: list[dict], evaluator, meta_teams: list[list[dict]],
+        top_n: int = 8,
+    ) -> list[dict]:
+        """Suggest replacements for a team slot.
+
+        Removes the mon at slot_idx, tries top candidates from pool,
+        evaluates each, returns best by fitness with delta.
+
+        Args:
+            team: Current 6-mon team.
+            slot_idx: Which slot to replace (0-5).
+            pool: Pokemon pool to draw candidates from.
+            evaluator: TeamEvaluator instance (fast_mode recommended).
+            meta_teams: Meta teams for alignment scoring.
+            top_n: Number of suggestions to return.
+
+        Returns:
+            List of dicts with species, fitness, delta, sprite.
+        """
+        if slot_idx < 0 or slot_idx >= len(team):
+            return []
+
+        # Score current team
+        current_fitness = evaluator.evaluate(team)
+
+        # Get existing species to avoid duplicates
+        existing = {_to_id(p.get("species", "")) for p in team if p}
+
+        # Deduplicate pool by species, take top 50 by frequency
+        species_count = {}
+        species_best = {}
+        for p in pool:
+            sp = _to_id(p.get("species", ""))
+            if sp and sp not in existing:
+                species_count[sp] = species_count.get(sp, 0) + 1
+                if sp not in species_best:
+                    species_best[sp] = p
+
+        # Sort by usage (frequency in pool)
+        top_species = sorted(species_count.keys(), key=lambda s: -species_count[s])[:50]
+
+        results = []
+        for sp in top_species:
+            cand = species_best[sp]
+            test_team = list(team)
+            test_team[slot_idx] = cand
+            fitness = evaluator.evaluate(test_team)
+            delta = fitness - current_fitness
+            results.append({
+                "species": cand.get("species", ""),
+                "fitness": round(float(fitness), 4),
+                "delta": round(float(delta), 4),
+                "sprite": f"https://play.pokemonshowdown.com/sprites/gen5/{_to_id(cand.get('species', ''))}.png",
+            })
+
+        results.sort(key=lambda x: -x["fitness"])
+        return results[:top_n]
 
     # ------------------------------------------------------------------
     # Helpers
