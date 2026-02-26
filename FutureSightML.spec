@@ -15,17 +15,33 @@ from pathlib import Path
 block_cipher = None
 project_root = Path(SPECPATH)
 
-# Find xgboost native files (DLL + VERSION)
+# Find xgboost native files (DLL/dylib/so + VERSION) — platform-aware
 def find_xgboost_files():
     binaries = []
     datas = []
     try:
         import xgboost
         xgb_dir = Path(xgboost.__file__).parent
-        # Native DLL
-        dll = xgb_dir / 'lib' / 'xgboost.dll'
-        if dll.exists():
-            binaries.append((str(dll), 'xgboost/lib'))
+
+        # Platform-specific native library name
+        if sys.platform == 'win32':
+            lib_names = ['xgboost.dll']
+        elif sys.platform == 'darwin':
+            lib_names = ['libxgboost.dylib']
+        else:
+            lib_names = ['libxgboost.so']
+
+        # Search in xgboost/lib/ and xgboost/ itself
+        search_dirs = [xgb_dir / 'lib', xgb_dir]
+        for search_dir in search_dirs:
+            for lib_name in lib_names:
+                lib_path = search_dir / lib_name
+                if lib_path.exists():
+                    binaries.append((str(lib_path), 'xgboost/lib'))
+                    break
+            if binaries:
+                break
+
         # VERSION file (required at runtime)
         version_file = xgb_dir / 'VERSION'
         if version_file.exists():
@@ -45,11 +61,19 @@ a = Analysis(
         (str(project_root / 'config.yaml'), '.'),
         # GUI static files (served by FastAPI)
         (str(project_root / 'gui' / 'static'), 'gui/static'),
-        # Pre-exported pool data
-        (str(project_root / 'data' / 'pools'), 'data/pools'),
-        # Model checkpoints
-        (str(project_root / 'data' / 'checkpoints'), 'data/checkpoints'),
-    ] + _xgb_datas,
+    ] + (
+        # Pre-exported pool data (optional — CI builds may lack models)
+        [(str(project_root / 'data' / 'pools'), 'data/pools')]
+        if (project_root / 'data' / 'pools').exists()
+        and any((project_root / 'data' / 'pools').glob('*.json'))
+        else []
+    ) + (
+        # Model checkpoints (optional — CI builds may lack models)
+        [(str(project_root / 'data' / 'checkpoints'), 'data/checkpoints')]
+        if (project_root / 'data' / 'checkpoints').exists()
+        and any((project_root / 'data' / 'checkpoints').iterdir())
+        else []
+    ) + _xgb_datas,
     hiddenimports=[
         # Uvicorn internals
         'uvicorn',
@@ -150,13 +174,21 @@ a = Analysis(
         'sphinx',
         'pytest',
     ],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
+    **(dict(win_no_prefer_redirects=False, win_private_assemblies=False) if sys.platform == 'win32' else {}),
     cipher=block_cipher,
     noarchive=False,
 )
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+
+# Platform-aware icon selection
+if sys.platform == 'win32':
+    _icon = str(project_root / 'gui' / 'static' / 'icon.ico')
+elif sys.platform == 'darwin':
+    _png = project_root / 'gui' / 'static' / 'icon.png'
+    _icon = str(_png) if _png.exists() else None
+else:
+    _icon = None  # Linux doesn't use EXE icons
 
 exe = EXE(
     pyz,
@@ -171,7 +203,7 @@ exe = EXE(
     console=True,  # Keep console for server stdout
     disable_windowed_traceback=False,
     argv_emulation=False,
-    icon=str(project_root / 'gui' / 'static' / 'icon.ico'),
+    icon=_icon,
 )
 
 coll = COLLECT(

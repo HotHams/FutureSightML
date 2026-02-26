@@ -7,6 +7,8 @@
     "start": "electron .",
     "build-win": "electron-builder --win",
     "build-mac": "electron-builder --mac",
+    "build-mac-x64": "electron-builder --mac --x64",
+    "build-mac-arm64": "electron-builder --mac --arm64",
     "build-linux": "electron-builder --linux"
   },
   "build": {
@@ -24,6 +26,26 @@
       ],
       "icon": "static/icon.ico",
       "signAndEditExecutable": false
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dir",
+          "arch": ["universal"]
+        }
+      ],
+      "icon": "static/icon.png",
+      "identity": null
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "static/icon.png",
+      "category": "Game"
     },
     "forceCodeSigning": false,
     "nsis": {

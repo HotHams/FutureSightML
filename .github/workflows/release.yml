@@ -1,0 +1,263 @@
+name: Build & Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      skip_models:
+        description: 'Skip model download (build without predictions)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win
+            arch: x64
+            torch_index: https://download.pytorch.org/whl/cu121
+            artifact: FutureSightML-win-x64
+          - os: macos-13
+            platform: mac
+            arch: x64
+            torch_index: ''
+            artifact: FutureSightML-mac-x64
+          - os: macos-14
+            platform: mac
+            arch: arm64
+            torch_index: ''
+            artifact: FutureSightML-mac-arm64
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+            torch_index: https://download.pytorch.org/whl/cpu
+            artifact: FutureSightML-linux-x64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Download model data
+        if: >-
+          !(github.event_name == 'workflow_dispatch' && inputs.skip_models)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Downloading model data from model-data release..."
+          gh release download model-data -p 'model-data.tar.gz' -R ${{ github.repository }} || {
+            echo "WARNING: No model-data release found. Building without models."
+            exit 0
+          }
+          echo "Extracting model data..."
+          tar xzf model-data.tar.gz
+          rm model-data.tar.gz
+          echo "Model data contents:"
+          ls -la data/checkpoints/ 2>/dev/null || echo "  No checkpoints dir"
+          ls -la data/pools/ 2>/dev/null | head -5 || echo "  No pools dir"
+
+      - name: Install PyTorch (platform-specific)
+        run: |
+          if [ -n "${{ matrix.torch_index }}" ]; then
+            pip install torch --index-url ${{ matrix.torch_index }}
+          else
+            pip install torch
+          fi
+
+      - name: Install Python dependencies
+        run: |
+          pip install -e .
+          pip install pyinstaller
+
+      - name: Install Electron dependencies
+        working-directory: gui
+        run: npm install
+
+      - name: Build application
+        run: python scripts/build_exe.py --ci --skip-pools --electron-arch ${{ matrix.arch }}
+
+      - name: Import Apple certificate
+        if: matrix.platform == 'mac' && env.APPLE_CERTIFICATE != ''
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          # Decode certificate
+          CERT_PATH="$RUNNER_TEMP/certificate.p12"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_PATH"
+
+          # Create temporary keychain
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Import certificate
+          security import "$CERT_PATH" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 \
+            -k "$KEYCHAIN_PATH"
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Add to keychain search list
+          security list-keychain -d user -s "$KEYCHAIN_PATH" login.keychain-db
+
+          # Verify identity is available
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+          # Save keychain path for later steps
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+
+      - name: Code sign (macOS)
+        if: matrix.platform == 'mac'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+        run: |
+          APP_DIR="gui/dist/mac-${{ matrix.arch }}"
+          if [ ! -d "$APP_DIR" ]; then
+            APP_DIR="gui/dist/mac"
+          fi
+          if [ ! -d "$APP_DIR/FutureSightML.app" ]; then
+            echo "WARNING: .app bundle not found in expected location"
+            ls -la gui/dist/
+            exit 1
+          fi
+
+          if [ -n "$APPLE_CERTIFICATE" ]; then
+            echo "Signing with Developer ID certificate..."
+            codesign --force --deep --options runtime \
+              --sign "Developer ID Application" \
+              --keychain "$KEYCHAIN_PATH" \
+              "$APP_DIR/FutureSightML.app"
+          else
+            echo "No certificate — falling back to ad-hoc signing..."
+            codesign --force --deep --sign - "$APP_DIR/FutureSightML.app"
+          fi
+          echo "Code signing complete."
+          codesign -dvv "$APP_DIR/FutureSightML.app"
+
+      - name: Notarize (macOS)
+        if: matrix.platform == 'mac' && env.APPLE_CERTIFICATE != ''
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          APP_DIR="gui/dist/mac-${{ matrix.arch }}"
+          if [ ! -d "$APP_DIR" ]; then
+            APP_DIR="gui/dist/mac"
+          fi
+
+          # Create zip for notarization submission
+          NOTARIZE_ZIP="$RUNNER_TEMP/FutureSightML-notarize.zip"
+          ditto -c -k --keepParent "$APP_DIR/FutureSightML.app" "$NOTARIZE_ZIP"
+
+          echo "Submitting for notarization..."
+          xcrun notarytool submit "$NOTARIZE_ZIP" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_ID_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait --timeout 30m
+
+          echo "Stapling notarization ticket..."
+          xcrun stapler staple "$APP_DIR/FutureSightML.app"
+
+          echo "Notarization complete."
+          spctl --assess -vv "$APP_DIR/FutureSightML.app" || true
+
+      - name: Clean up keychain (macOS)
+        if: always() && matrix.platform == 'mac' && env.KEYCHAIN_PATH != ''
+        run: |
+          security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
+
+      - name: Package artifact (Windows)
+        if: matrix.platform == 'win'
+        shell: bash
+        run: |
+          cd gui/dist
+          7z a -tzip "../../${{ matrix.artifact }}.zip" win-unpacked/
+
+      - name: Package artifact (macOS)
+        if: matrix.platform == 'mac'
+        run: |
+          cd gui/dist
+          APP_DIR="mac-${{ matrix.arch }}"
+          if [ ! -d "$APP_DIR" ]; then
+            APP_DIR="mac"
+          fi
+          zip -r "../../${{ matrix.artifact }}.zip" "$APP_DIR/"
+
+      - name: Package artifact (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          cd gui/dist
+          # AppImage or dir output
+          if ls FutureSightML-*.AppImage 1>/dev/null 2>&1; then
+            tar czf "../../${{ matrix.artifact }}.tar.gz" FutureSightML-*.AppImage
+          else
+            tar czf "../../${{ matrix.artifact }}.tar.gz" linux-unpacked/
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.*
+          retention-days: 30
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "Creating release for $TAG..."
+
+          # Collect all artifact files
+          FILES=""
+          for dir in artifacts/*/; do
+            for file in "$dir"*; do
+              if [ -f "$file" ]; then
+                FILES="$FILES $file"
+              fi
+            done
+          done
+
+          echo "Release files: $FILES"
+
+          gh release create "$TAG" \
+            --repo "${{ github.repository }}" \
+            --title "FutureSightML $TAG" \
+            --generate-notes \
+            $FILES

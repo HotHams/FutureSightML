@@ -67,15 +67,20 @@ PIXELS = [
 # fmt: on
 
 
-def create_icon(output_path: Path) -> None:
-    """Create multi-size ICO from 16x16 pixel art."""
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Build 16x16 base image
+def _build_base_image() -> Image.Image:
+    """Build the 16x16 base pixel art image."""
     base = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
     for y, row in enumerate(PIXELS):
         for x, color in enumerate(row):
             base.putpixel((x, y), color)
+    return base
+
+
+def create_icon(output_path: Path) -> None:
+    """Create multi-size ICO from 16x16 pixel art."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    base = _build_base_image()
 
     # Generate sizes via nearest-neighbor (keeps chunky pixels)
     sizes = [16, 32, 48, 64, 256]
@@ -95,10 +100,22 @@ def create_icon(output_path: Path) -> None:
     print(f"Icon saved: {output_path} ({', '.join(f'{s}x{s}' for s in sizes)})")
 
 
+def create_png(output_path: Path, size: int = 512) -> None:
+    """Create a high-res PNG icon (for macOS/Linux and electron-builder)."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    base = _build_base_image()
+    large = base.resize((size, size), Image.NEAREST)
+    large.save(str(output_path), format="PNG")
+    print(f"PNG icon saved: {output_path} ({size}x{size})")
+
+
 def main():
     project_root = Path(__file__).resolve().parent.parent
-    output = project_root / "gui" / "static" / "icon.ico"
-    create_icon(output)
+    static_dir = project_root / "gui" / "static"
+
+    # Always generate both formats
+    create_icon(static_dir / "icon.ico")
+    create_png(static_dir / "icon.png", size=512)
 
 
 if __name__ == "__main__":

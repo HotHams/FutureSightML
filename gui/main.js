@@ -9,6 +9,14 @@ const API_URL = `http://127.0.0.1:${PORT}`;
 let mainWindow;
 let serverProcess;
 
+function getIconPath() {
+    if (process.platform === 'win32') {
+        return path.join(__dirname, 'static', 'icon.ico');
+    }
+    // macOS and Linux use PNG (electron-builder handles .icns conversion for mac .app bundle)
+    return path.join(__dirname, 'static', 'icon.png');
+}
+
 function createWindow() {
     mainWindow = new BrowserWindow({
         width: 1400,
@@ -17,7 +25,7 @@ function createWindow() {
         minHeight: 700,
         title: 'FutureSightML',
         backgroundColor: '#0c0c1e',
-        icon: path.join(__dirname, 'static', 'icon.ico'),
+        icon: getIconPath(),
         webPreferences: {
             nodeIntegration: false,
             contextIsolation: true,
