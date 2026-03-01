@@ -28,12 +28,7 @@
       "signAndEditExecutable": false
     },
     "mac": {
-      "target": [
-        {
-          "target": "dir",
-          "arch": ["universal"]
-        }
-      ],
+      "target": "dir",
       "icon": "static/icon.png",
       "identity": null
     },
