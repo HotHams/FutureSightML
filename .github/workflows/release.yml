@@ -95,73 +95,11 @@ jobs:
       - name: Build application
         run: python scripts/build_exe.py --ci --skip-pools --electron-arch ${{ matrix.arch }}
 
-      - name: Import Apple certificate
-        if: matrix.platform == 'mac' && env.APPLE_CERTIFICATE != ''
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-        run: |
-          # Decode certificate
-          CERT_PATH="$RUNNER_TEMP/certificate.p12"
-          echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_PATH"
-
-          # Create temporary keychain
-          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
-          KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          # Import certificate
-          security import "$CERT_PATH" \
-            -P "$APPLE_CERTIFICATE_PASSWORD" \
-            -A -t cert -f pkcs12 \
-            -k "$KEYCHAIN_PATH"
-          security set-key-partition-list \
-            -S apple-tool:,apple: \
-            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          # Add to keychain search list
-          security list-keychain -d user -s "$KEYCHAIN_PATH" login.keychain-db
-
-          # Verify identity is available
-          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
-
-          # Save keychain path for later steps
-          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
-
-      - name: Code sign (macOS)
+      - name: Import Apple certificate and sign (macOS)
         if: matrix.platform == 'mac'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-        run: |
-          APP_DIR="gui/dist/mac-${{ matrix.arch }}"
-          if [ ! -d "$APP_DIR" ]; then
-            APP_DIR="gui/dist/mac"
-          fi
-          if [ ! -d "$APP_DIR/FutureSightML.app" ]; then
-            echo "WARNING: .app bundle not found in expected location"
-            ls -la gui/dist/
-            exit 1
-          fi
-
-          if [ -n "$APPLE_CERTIFICATE" ]; then
-            echo "Signing with Developer ID certificate..."
-            codesign --force --deep --options runtime \
-              --sign "Developer ID Application" \
-              --keychain "$KEYCHAIN_PATH" \
-              "$APP_DIR/FutureSightML.app"
-          else
-            echo "No certificate — falling back to ad-hoc signing..."
-            codesign --force --deep --sign - "$APP_DIR/FutureSightML.app"
-          fi
-          echo "Code signing complete."
-          codesign -dvv "$APP_DIR/FutureSightML.app"
-
-      - name: Notarize (macOS)
-        if: matrix.platform == 'mac' && env.APPLE_CERTIFICATE != ''
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -170,28 +108,69 @@ jobs:
           if [ ! -d "$APP_DIR" ]; then
             APP_DIR="gui/dist/mac"
           fi
+          if [ ! -d "$APP_DIR/FutureSightML.app" ]; then
+            echo "ERROR: .app bundle not found"
+            ls -la gui/dist/
+            exit 1
+          fi
 
-          # Create zip for notarization submission
-          NOTARIZE_ZIP="$RUNNER_TEMP/FutureSightML-notarize.zip"
-          ditto -c -k --keepParent "$APP_DIR/FutureSightML.app" "$NOTARIZE_ZIP"
+          DEVID_SIGNED=false
 
-          echo "Submitting for notarization..."
-          xcrun notarytool submit "$NOTARIZE_ZIP" \
-            --apple-id "$APPLE_ID" \
-            --password "$APPLE_ID_PASSWORD" \
-            --team-id "$APPLE_TEAM_ID" \
-            --wait --timeout 30m
+          # Try Developer ID signing if cert is available
+          if [ -n "$APPLE_CERTIFICATE" ]; then
+            echo "Attempting Developer ID signing..."
+            CERT_PATH="$RUNNER_TEMP/certificate.p12"
+            echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_PATH"
 
-          echo "Stapling notarization ticket..."
-          xcrun stapler staple "$APP_DIR/FutureSightML.app"
+            KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+            KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
+            security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+            security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+            security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-          echo "Notarization complete."
-          spctl --assess -vv "$APP_DIR/FutureSightML.app" || true
+            if security import "$CERT_PATH" \
+                -P "$APPLE_CERTIFICATE_PASSWORD" \
+                -A -t cert -f pkcs12 \
+                -k "$KEYCHAIN_PATH" 2>/dev/null; then
 
-      - name: Clean up keychain (macOS)
-        if: always() && matrix.platform == 'mac' && env.KEYCHAIN_PATH != ''
-        run: |
-          security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
+              security set-key-partition-list \
+                -S apple-tool:,apple: \
+                -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+              security list-keychain -d user -s "$KEYCHAIN_PATH" login.keychain-db
+              security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+              codesign --force --deep --options runtime \
+                --sign "Developer ID Application" \
+                --keychain "$KEYCHAIN_PATH" \
+                "$APP_DIR/FutureSightML.app"
+              DEVID_SIGNED=true
+              echo "Developer ID signing complete."
+
+              # Notarize
+              if [ -n "$APPLE_ID" ] && [ -n "$APPLE_ID_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ]; then
+                NOTARIZE_ZIP="$RUNNER_TEMP/FutureSightML-notarize.zip"
+                ditto -c -k --keepParent "$APP_DIR/FutureSightML.app" "$NOTARIZE_ZIP"
+                echo "Submitting for notarization..."
+                xcrun notarytool submit "$NOTARIZE_ZIP" \
+                  --apple-id "$APPLE_ID" \
+                  --password "$APPLE_ID_PASSWORD" \
+                  --team-id "$APPLE_TEAM_ID" \
+                  --wait --timeout 30m || echo "WARNING: Notarization failed, continuing with signed-only build"
+                xcrun stapler staple "$APP_DIR/FutureSightML.app" || true
+              fi
+            else
+              echo "WARNING: Certificate import failed (wrong password?). Falling back to ad-hoc signing."
+              security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
+            fi
+          fi
+
+          if [ "$DEVID_SIGNED" = false ]; then
+            echo "Ad-hoc signing..."
+            codesign --force --deep --sign - "$APP_DIR/FutureSightML.app"
+          fi
+
+          codesign -dvv "$APP_DIR/FutureSightML.app"
+          echo "Signing complete (Developer ID: $DEVID_SIGNED)"
 
       - name: Package artifact (Windows)
         if: matrix.platform == 'win'
