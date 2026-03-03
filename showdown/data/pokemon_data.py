@@ -43,6 +43,45 @@ def _to_id(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", name.lower())
 
 
+def _strip_function_bodies(text: str) -> str:
+    """Remove JS method definitions (e.g. onTakeItem(a,b) { ... },) entirely.
+
+    Uses brace-matching to correctly handle nested braces inside function bodies.
+    Removes trailing comma so the remaining object literal stays valid.
+    """
+    fn_sig = re.compile(r'\w+\s*\([^)]*\)\s*\{')
+    result = []
+    i = 0
+    while i < len(text):
+        m = fn_sig.search(text, i)
+        if not m:
+            result.append(text[i:])
+            break
+        # Back up to remove preceding whitespace/tabs on this line
+        fn_start = m.start()
+        while fn_start > i and text[fn_start - 1] in " \t":
+            fn_start -= 1
+        result.append(text[i:fn_start])
+        # Brace-match from the opening {
+        brace_start = m.end() - 1
+        depth = 0
+        j = brace_start
+        while j < len(text):
+            if text[j] == "{":
+                depth += 1
+            elif text[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        # Skip past closing brace and trailing comma/whitespace
+        j += 1
+        while j < len(text) and text[j] in " \t\r\n,":
+            j += 1
+        i = j
+    return "".join(result)
+
+
 def _parse_ts_object(text: str) -> dict[str, Any]:
     """Parse a Showdown TypeScript data export into a Python dict.
 
@@ -74,6 +113,9 @@ def _parse_ts_object(text: str) -> dict[str, Any]:
     obj_text = text[start:end]
 
     # Convert TS object literal to valid JSON:
+    # 0. Strip JS function/method bodies FIRST (before any text transforms)
+    #    e.g. onTakeItem(item, source) { ...code... }, → removed entirely
+    obj_text = _strip_function_bodies(obj_text)
     # 1. Replace single quotes with double quotes
     obj_text = obj_text.replace("'", '"')
     # 2. Handle template literals
@@ -109,8 +151,7 @@ def _parse_ts_object(text: str) -> dict[str, Any]:
 def _fallback_parse(text: str) -> dict[str, Any]:
     """Fallback parser: extract top-level key:object entries one at a time."""
     result = {}
-    # Match top-level entries: "key": { ... }
-    # We need to handle both quoted and potentially unquoted keys
+    # Match top-level entries: "key": { ... } (keys are already quoted by caller)
     pattern = re.compile(r'["\s](\w+)"\s*:\s*\{', re.MULTILINE)
     positions = [(m.group(1), m.end() - 1) for m in pattern.finditer(text)]
 

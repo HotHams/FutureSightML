@@ -34,3 +34,9 @@ gui/node_modules/
 gui/package-lock.json
 gui/dist/
 data/pools/
+
+# Build artifacts and archives
+*.zip
+*.tar.gz
+*.tar
+*.7z

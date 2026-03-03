@@ -22,7 +22,7 @@ jobs:
           - os: windows-latest
             platform: win
             arch: x64
-            torch_index: https://download.pytorch.org/whl/cu121
+            torch_index: https://download.pytorch.org/whl/cpu
             artifact: FutureSightML-win-x64
           - os: macos-14
             platform: mac

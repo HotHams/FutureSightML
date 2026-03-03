@@ -153,12 +153,55 @@ async def main():
             db=db,
         )
 
-        log.info("Neural model results: AUC=%.4f, best_epoch=%d",
+        log.info("Neural model results: val_AUC=%.4f, best_epoch=%d",
                  neural_metrics["best_val_auc"], neural_metrics["best_epoch"])
 
-        # Test set evaluation
+        # Test set evaluation (with rating features as-is)
         test_loader_data = _list_to_arrays(neural_data["test"])
-        # Saved with checkpoint already
+        if test_loader_data:
+            from sklearn.metrics import roc_auc_score, accuracy_score
+            import torch
+
+            def _to_tensor(arr):
+                t = torch.tensor(arr)
+                if t.is_floating_point():
+                    t = t.float()
+                return t
+
+            test_keys = [
+                "team1_species", "team1_moves", "team1_items", "team1_abilities",
+                "team2_species", "team2_moves", "team2_items", "team2_abilities",
+                "rating_features", "label",
+            ]
+            if "team1_continuous" in test_loader_data:
+                test_keys += ["team1_continuous", "team2_continuous"]
+
+            test_dataset = torch.utils.data.TensorDataset(
+                *[_to_tensor(test_loader_data[k]) for k in test_keys]
+            )
+            test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+            test_metrics = trainer._evaluate_neural(model, test_loader, torch.nn.BCELoss())
+            log.info("Neural TEST results (with ratings): AUC=%.4f, acc=%.4f",
+                     test_metrics["auc"], test_metrics["accuracy"])
+
+            # Team-only evaluation: equalize rating features to 1500/1500
+            test_data_teamonly = {k: v.copy() if isinstance(v, np.ndarray) else v
+                                 for k, v in test_loader_data.items()}
+            equal_ratings = np.full_like(test_data_teamonly["rating_features"], 0.0)
+            equal_ratings[:, 0] = 0.75  # r1/2000 = 1500/2000
+            equal_ratings[:, 1] = 0.75  # r2/2000 = 1500/2000
+            equal_ratings[:, 2] = 0.0   # diff = 0
+            equal_ratings[:, 3] = 1.0   # has_both = True
+            equal_ratings[:, 4] = 0.75  # max/2000 = 1500/2000
+            equal_ratings[:, 5] = 0.0   # abs_diff = 0
+            test_data_teamonly["rating_features"] = equal_ratings
+            teamonly_dataset = torch.utils.data.TensorDataset(
+                *[_to_tensor(test_data_teamonly[k]) for k in test_keys]
+            )
+            teamonly_loader = torch.utils.data.DataLoader(teamonly_dataset, batch_size=batch_size, shuffle=False)
+            teamonly_metrics = trainer._evaluate_neural(model, teamonly_loader, torch.nn.BCELoss())
+            log.info("Neural TEST results (TEAM-ONLY, no ratings): AUC=%.4f, acc=%.4f",
+                     teamonly_metrics["auc"], teamonly_metrics["accuracy"])
 
     # ---- Train XGBoost model ----
     if args.model in ("xgboost", "both"):
@@ -199,10 +242,24 @@ async def main():
             sample_weight=w_train,
         )
 
-        # Test set evaluation
+        # Test set evaluation (with rating features as-is)
         test_results = xgb_model.evaluate(X_test, y_test)
-        log.info("XGBoost test results: accuracy=%.4f, AUC=%.4f",
+        log.info("XGBoost TEST results (with ratings): accuracy=%.4f, AUC=%.4f",
                  test_results["accuracy"], test_results["auc"])
+
+        # Team-only evaluation: equalize rating features to 1500/1500
+        # Rating features are the last 6 columns of the feature matrix
+        X_test_teamonly = X_test.copy()
+        n_feat = X_test_teamonly.shape[1]
+        X_test_teamonly[:, n_feat - 6] = 0.75      # r1/2000 = 1500/2000
+        X_test_teamonly[:, n_feat - 5] = 0.75      # r2/2000 = 1500/2000
+        X_test_teamonly[:, n_feat - 4] = 0.0       # diff = 0
+        X_test_teamonly[:, n_feat - 3] = 1.0       # has_both = True
+        X_test_teamonly[:, n_feat - 2] = 0.75      # max/2000 = 1500/2000
+        X_test_teamonly[:, n_feat - 1] = 0.0       # abs_diff = 0
+        teamonly_results = xgb_model.evaluate(X_test_teamonly, y_test)
+        log.info("XGBoost TEST results (TEAM-ONLY, no ratings): accuracy=%.4f, AUC=%.4f",
+                 teamonly_results["accuracy"], teamonly_results["auc"])
 
         # Feature importance
         top_features = xgb_model.feature_importance(top_n=20)
@@ -214,10 +271,11 @@ async def main():
         log.info("CALIBRATING ENSEMBLE WEIGHTS")
         log.info("=" * 60)
 
-        # Reconstruct the val split (same seed=42 as preprocessor)
-        rng = np.random.RandomState(42)
-        indices = rng.permutation(len(battles))
-        shuffled = [battles[i] for i in indices]
+        # Reconstruct the val split (same RNG as preprocessor: random.seed + random.shuffle)
+        import random as _random
+        _random.seed(42)
+        shuffled = list(battles)
+        _random.shuffle(shuffled)
         n = len(shuffled)
         train_end = int(n * train_cfg.get("train_split", 0.8))
         val_end = int(n * (train_cfg.get("train_split", 0.8) + train_cfg.get("val_split", 0.1)))

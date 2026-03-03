@@ -93,7 +93,7 @@ class TestWinPredictor:
 
     def test_forward_with_rating_features(self):
         inputs = self._make_inputs()
-        rating_features = torch.randn(BATCH, 2)
+        rating_features = torch.randn(BATCH, 6)
         out = self.model(*inputs, rating_features=rating_features)
         assert out.shape == (BATCH,)
         assert (out >= 0).all() and (out <= 1).all()
@@ -101,8 +101,15 @@ class TestWinPredictor:
     def test_gradient_flows(self):
         """Ensure gradients flow through the entire model."""
         inputs = self._make_inputs()
-        rating_features = torch.randn(BATCH, 2)
-        out = self.model(*inputs, rating_features=rating_features)
+        rating_features = torch.randn(BATCH, 6)
+        # Include continuous features so all layers are exercised
+        continuous_dim = self.model.pokemon_encoder.continuous_proj[0].in_features
+        t1_cont = torch.randn(BATCH, TEAM_SIZE, continuous_dim)
+        t2_cont = torch.randn(BATCH, TEAM_SIZE, continuous_dim)
+        out = self.model(
+            *inputs, rating_features=rating_features,
+            team1_continuous=t1_cont, team2_continuous=t2_cont,
+        )
         loss = out.sum()
         loss.backward()
 

@@ -240,6 +240,50 @@ PHYSICAL = "Physical"
 SPECIAL = "Special"
 STATUS = "Status"
 
+# Gen 1-3: move category determined by type, not per-move.
+# The classification is identical across Gen 1, 2, and 3.
+# (Gen 1 simply lacks Dark and Steel; Gen 2-3 add them.)
+_PRE_SPLIT_PHYSICAL_TYPES = frozenset([
+    "Normal", "Fighting", "Flying", "Poison", "Ground",
+    "Rock", "Bug", "Ghost", "Steel",
+])
+_PRE_SPLIT_SPECIAL_TYPES = frozenset([
+    "Fire", "Water", "Electric", "Grass", "Ice",
+    "Psychic", "Dragon", "Dark",
+])
+
+
+def unify_special_stat(stats: dict, gen: int) -> dict:
+    """Return stats dict with Gen 1 Special stat unification applied.
+
+    Gen 1 had a single 'Special' stat used for both offense and defense.
+    The Showdown pokedex stores modern split SpA/SpD values.
+    For Gen 1, we use SpA as the unified Special for both.
+    Gen 2+ already have separate SpA/SpD and need no adjustment.
+    """
+    if gen <= 1:
+        spa = stats.get("spa", stats.get("spd", 80))
+        return {**stats, "spa": spa, "spd": spa}
+    return stats
+
+
+def get_move_category(move_data: dict, gen: int = 9) -> str:
+    """Return the effective category of a move, gen-aware.
+
+    Gen 1-3: category is determined by move type.
+    Gen 4+: category is per-move (from the move data).
+    """
+    cat = move_data.get("category", "")
+    if cat == "Status":
+        return "Status"
+    if gen <= 3:
+        mtype = move_data.get("type", "Normal")
+        if mtype in _PRE_SPLIT_PHYSICAL_TYPES:
+            return "Physical"
+        elif mtype in _PRE_SPLIT_SPECIAL_TYPES:
+            return "Special"
+    return cat
+
 # Format types
 FORMAT_SINGLES = "singles"
 FORMAT_DOUBLES = "doubles"

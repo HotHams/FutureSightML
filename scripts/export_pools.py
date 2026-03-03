@@ -78,6 +78,7 @@ async def export_format(
     validated_pool = []
     stripped_moves = 0
     dropped_sets = 0
+    seen_keys = set()
     for pset in pokemon_pool:
         species_id = _to_id(pset.get("species", ""))
         moves = pset.get("moves", [])
@@ -91,6 +92,14 @@ async def export_format(
         if len(valid_moves) >= 2:
             pset = dict(pset)
             pset["moves"] = valid_moves
+            # Deduplicate identical sets
+            key = (species_id,
+                   _to_id(pset.get("ability") or ""),
+                   _to_id(pset.get("item") or ""),
+                   tuple(sorted(_to_id(m) for m in valid_moves)))
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
             # Strip gen-inappropriate fields
             if gen < 3:
                 pset.pop("ability", None)
@@ -104,8 +113,8 @@ async def export_format(
             validated_pool.append(pset)
         else:
             dropped_sets += 1
-    if stripped_moves or dropped_sets:
-        log.info("Gen %d validation for %s: stripped %d illegal moves, dropped %d sets (%d -> %d)",
+    if stripped_moves or dropped_sets or len(validated_pool) < len(pokemon_pool):
+        log.info("Gen %d validation for %s: stripped %d illegal moves, dropped %d sets, deduped %d -> %d",
                  gen, fmt, stripped_moves, dropped_sets, len(pokemon_pool), len(validated_pool))
     pokemon_pool = validated_pool
 

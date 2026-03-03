@@ -122,9 +122,13 @@ class DataPreprocessor:
         Returns dict with 'train', 'val', 'test' keys, each a tuple of (X, y, w).
         """
         # Split battles before augmentation to prevent leakage
-        rng = np.random.default_rng(self.seed)
-        indices = rng.permutation(len(battles))
-        shuffled = [battles[i] for i in indices]
+        # Use same RNG as neural (random.seed + random.shuffle) for consistent splits
+        rng_state = random.getstate()
+        random.seed(self.seed)
+        shuffled = list(battles)
+        random.shuffle(shuffled)
+        random.setstate(rng_state)
+        rng = np.random.default_rng(self.seed)  # keep for within-split shuffling
         n = len(shuffled)
         train_end = int(n * self.train_split)
         val_end = int(n * (self.train_split + self.val_split))

@@ -390,9 +390,17 @@ class MetaAnalyzer:
         )[:top_n]
 
         pool = []
+        global_seen = set()
         for species_id, data in sorted_pokemon:
             sets = self.build_pokemon_sets(species_id, data, max_sets=sets_per_pokemon)
-            pool.extend(sets)
+            for s in sets:
+                key = (_to_id(s.get("species", "")),
+                       _to_id(s.get("ability") or ""),
+                       _to_id(s.get("item") or ""),
+                       tuple(sorted(_to_id(m) for m in s.get("moves", []))))
+                if key not in global_seen:
+                    global_seen.add(key)
+                    pool.append(s)
 
         # Enforce 4-move minimum
         before = len(pool)
@@ -502,6 +510,7 @@ class MetaAnalyzer:
             top_species = [(sp, c) for sp, c in top_species if c >= min_count]
 
         pool = []
+        global_seen = set()
 
         for sp_id, count in top_species:
             all_moves_for_species = [m for m, _ in species_moves[sp_id].most_common(20)]
@@ -509,7 +518,6 @@ class MetaAnalyzer:
             top_items_list = [it for it, _ in species_items[sp_id].most_common(4)]
             top_abilities_list = [ab for ab, _ in species_abilities[sp_id].most_common(3)]
 
-            seen_keys = set()
             sets_made = 0
 
             # Generate distinct sets by varying items and abilities
@@ -531,10 +539,10 @@ class MetaAnalyzer:
                     if len(moveset) < 4:
                         continue  # skip if even padding couldn't reach 4
                     ability = self._validate_ability(sp_id, ability)
-                    key = (ability, item, tuple(sorted(moveset)))
-                    if key in seen_keys:
+                    key = (_to_id(sp_id), _to_id(ability or ""), _to_id(item or ""), tuple(sorted(_to_id(m) for m in moveset)))
+                    if key in global_seen:
                         continue
-                    seen_keys.add(key)
+                    global_seen.add(key)
                     pool.append({
                         "species": sp_id,
                         "ability": ability,
@@ -557,8 +565,8 @@ class MetaAnalyzer:
                 if len(alt_moves) >= 4:
                     ability = self._validate_ability(sp_id, top_abilities_list[0] if top_abilities_list else None)
                     item = top_items_list[0] if top_items_list else None
-                    key = (ability, item, tuple(sorted(alt_moves)))
-                    if key not in seen_keys:
+                    key = (_to_id(sp_id), _to_id(ability or ""), _to_id(item or ""), tuple(sorted(_to_id(m) for m in alt_moves)))
+                    if key not in global_seen:
                         pool.append({
                             "species": sp_id,
                             "ability": ability,

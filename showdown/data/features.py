@@ -19,6 +19,7 @@ from ..utils.constants import (
     NATURES, calc_stat, IV_DEFAULT, LEVEL_100,
     extract_gen, get_type_chart_for_gen, get_stat_defaults,
     type_effectiveness_gen, type_effectiveness_against_gen,
+    get_move_category, unify_special_stat,
 )
 from .mechanics import (
     ITEM_EFFECTS, ABILITY_EFFECTS,
@@ -329,12 +330,9 @@ class FeatureExtractor:
         # Base stats [0-5]
         base_stats = self._get_base_stats(species_id)
         if base_stats:
+            base_stats = unify_special_stat(base_stats, self.gen)
             for i, sn in enumerate(STAT_NAMES):
-                val = base_stats.get(sn, 0)
-                # Gen 1: unified Special stat — copy to both SpA and SpD slots
-                if self.gen <= 1 and sn in ("spa", "spd"):
-                    val = base_stats.get("spa", base_stats.get("spd", 0))
-                feats[i] = val / 255.0
+                feats[i] = base_stats.get(sn, 0) / 255.0
 
         # Computed stats [6-11]
         computed = None
@@ -384,7 +382,7 @@ class FeatureExtractor:
             move_data = self._get_move(move_name)
             if move_data:
                 bp = move_data.get("basePower", 0)
-                cat = move_data.get("category", "")
+                cat = get_move_category(move_data, self.gen)
                 mtype = move_data.get("type", "")
                 if cat != "Status" and bp > 0:
                     damaging_count += 1
@@ -500,12 +498,10 @@ class FeatureExtractor:
                     ivs = spread.get("ivs", {})
 
         nature_mults = NATURES.get(nature_name, {})
+        base_stats = unify_special_stat(base_stats, self.gen)
         computed = {}
         for sn in STAT_NAMES:
             base = base_stats.get(sn, 80)
-            # Gen 1: unified Special -> copy to both SpA and SpD
-            if self.gen <= 1 and sn in ("spa", "spd"):
-                base = base_stats.get("spa", base_stats.get("spd", 80))
             iv = ivs.get(sn, self._stat_defaults["iv"])
             ev = evs.get(sn, 0)
             nat_mult = nature_mults.get(sn, 1.0)
@@ -587,6 +583,7 @@ class FeatureExtractor:
 
             stats = self._get_base_stats(species_id)
             if stats:
+                stats = unify_special_stat(stats, self.gen)
                 base_stats_list.append(stats)
                 speeds.append(stats.get("spe", 0))
             else:
@@ -1025,8 +1022,8 @@ class FeatureExtractor:
         """
         atk_id = _to_id(attacker.get("species", ""))
         def_id = _to_id(defender.get("species", ""))
-        atk_base = self._get_base_stats(atk_id) or {}
-        def_base = self._get_base_stats(def_id) or {}
+        atk_base = unify_special_stat(self._get_base_stats(atk_id) or {}, self.gen)
+        def_base = unify_special_stat(self._get_base_stats(def_id) or {}, self.gen)
         atk_types = self._get_types(atk_id)
         def_types = self._get_types(def_id)
 
@@ -1074,7 +1071,7 @@ class FeatureExtractor:
             move_data = self._get_move(move_name)
             if not move_data:
                 continue
-            dmg = estimate_damage_pct(atk_data, def_data, move_data, type_chart=self._gen_chart)
+            dmg = estimate_damage_pct(atk_data, def_data, move_data, type_chart=self._gen_chart, gen=self.gen)
             if dmg > best:
                 best = dmg
         return best
@@ -1455,7 +1452,7 @@ class FeatureExtractor:
 
         for pkmn in team:
             species_id = _to_id(pkmn.get("species", ""))
-            base = self._get_base_stats(species_id) or {}
+            base = unify_special_stat(self._get_base_stats(species_id) or {}, self.gen)
             pkmn_types = self._get_types(species_id)
             item_id = _to_id(pkmn.get("item", "") or "")
             ability_id = _to_id(pkmn.get("ability", "") or "")
@@ -1480,7 +1477,7 @@ class FeatureExtractor:
                 md = self._get_move(m)
                 if md:
                     bp = md.get("basePower", 0)
-                    cat = md.get("category", "")
+                    cat = get_move_category(md, self.gen)
                     mtype = md.get("type", "")
                     stab = 1.5 if mtype in pkmn_types else 1.0
                     if cat == "Physical" and bp > 0:
@@ -1659,7 +1656,7 @@ class FeatureExtractor:
                         "type": mtype,
                         "type_idx": TYPE_TO_IDX.get(mtype, -1),
                         "basePower": md.get("basePower", 0),
-                        "category": md.get("category", ""),
+                        "category": get_move_category(md, self.gen),
                         "is_stab": TYPE_TO_IDX.get(mtype, -1) in stab_type_indices,
                         # Full move data for damage_calc
                         "name": md.get("name", ""),
@@ -1671,6 +1668,8 @@ class FeatureExtractor:
                         "overrideDefensiveStat": md.get("overrideDefensiveStat"),
                     })
 
+            # Gen 1: unify Special stat (SpA == SpD)
+            stats = unify_special_stat(stats, self.gen)
             hp = stats.get("hp", 80)
             atk = stats.get("atk", 80)
             dfn = stats.get("def", 80)
@@ -1837,10 +1836,10 @@ class FeatureExtractor:
         threat_t2 = []
         for p1 in t1_data:
             for p2 in t2_data:
-                threat_t1.append(estimate_best_move_damage(p1, p2, type_chart=self._gen_chart))
+                threat_t1.append(estimate_best_move_damage(p1, p2, type_chart=self._gen_chart, gen=self.gen))
         for p2 in t2_data:
             for p1 in t1_data:
-                threat_t2.append(estimate_best_move_damage(p2, p1, type_chart=self._gen_chart))
+                threat_t2.append(estimate_best_move_damage(p2, p1, type_chart=self._gen_chart, gen=self.gen))
 
         if threat_t1:
             features.extend([np.mean(threat_t1), max(threat_t1), min(threat_t1)])
@@ -1964,7 +1963,7 @@ class FeatureExtractor:
 
         Uses item/ability modifiers from precompute_team_data().
         """
-        return estimate_best_move_damage(atk_data, def_data, type_chart=self._gen_chart)
+        return estimate_best_move_damage(atk_data, def_data, type_chart=self._gen_chart, gen=self.gen)
 
     # ------------------------------------------------------------------
     # Helper methods

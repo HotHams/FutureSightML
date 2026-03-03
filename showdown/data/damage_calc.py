@@ -32,6 +32,7 @@ from ..utils.constants import (
     type_effectiveness_against,
     type_effectiveness_against_gen,
     _TYPE_CHART_GEN6PLUS,
+    get_move_category,
 )
 
 
@@ -73,6 +74,7 @@ def estimate_damage_pct(
     move_data: dict,
     level: int = 100,
     type_chart: Dict[Tuple[str, str], float] | None = None,
+    gen: int = 9,
 ) -> float:
     """Estimate damage as fraction of defender's HP (0 to 2.0 cap).
 
@@ -94,14 +96,14 @@ def estimate_damage_pct(
         Estimated damage as fraction of defender HP, capped at 2.0.
     """
     bp = move_data.get("basePower", 0)
-    category = move_data.get("category", "")
     move_type = move_data.get("type", "")
     flags = move_data.get("flags", {})
 
-    if bp <= 0 or category == "Status":
+    effective_category = get_move_category(move_data, gen)
+    if bp <= 0 or effective_category == "Status":
         return 0.0
 
-    is_physical = (category == "Physical")
+    is_physical = (effective_category == "Physical")
 
     # --- Determine attacking stat ---
     override_off = move_data.get("overrideOffensiveStat")
@@ -250,6 +252,7 @@ def estimate_best_move_damage(
     atk_data: dict,
     def_data: dict,
     type_chart: Dict[Tuple[str, str], float] | None = None,
+    gen: int = 9,
 ) -> float:
     """Estimate the best move's damage % from attacker against defender.
 
@@ -257,7 +260,7 @@ def estimate_best_move_damage(
     """
     best = 0.0
     for md in atk_data.get("moves_data", []):
-        dmg = estimate_damage_pct(atk_data, def_data, md, type_chart=type_chart)
+        dmg = estimate_damage_pct(atk_data, def_data, md, type_chart=type_chart, gen=gen)
         if dmg > best:
             best = dmg
     return best

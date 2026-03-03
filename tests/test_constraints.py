@@ -7,12 +7,18 @@ class TestFormatConstraints:
     def test_legal_team(self):
         constraints = FormatConstraints("gen9ou")
         team = [
-            {"species": "garchomp", "ability": "roughskin", "item": "choicescarf", "moves": ["earthquake"]},
-            {"species": "clefable", "ability": "magicguard", "item": "leftovers", "moves": ["moonblast"]},
-            {"species": "ferrothorn", "ability": "ironbarbs", "item": "rockyhelmet", "moves": ["stealthrock"]},
-            {"species": "rotomwash", "ability": "levitate", "item": "heavydutyboots", "moves": ["voltswitch"]},
-            {"species": "dragapult", "ability": "clearbody", "item": "choicespecs", "moves": ["shadowball"]},
-            {"species": "greattusk", "ability": "protosynthesis", "item": "boosterenergy", "moves": ["earthquake"]},
+            {"species": "garchomp", "ability": "roughskin", "item": "choicescarf",
+             "moves": ["earthquake", "dragonclaw", "swordsdance", "stealthrock"]},
+            {"species": "clefable", "ability": "magicguard", "item": "leftovers",
+             "moves": ["moonblast", "softboiled", "calmmind", "thunderwave"]},
+            {"species": "ferrothorn", "ability": "ironbarbs", "item": "rockyhelmet",
+             "moves": ["stealthrock", "leechseed", "powerwhip", "knockoff"]},
+            {"species": "rotomwash", "ability": "levitate", "item": "heavydutyboots",
+             "moves": ["voltswitch", "hydropump", "willowisp", "painsplit"]},
+            {"species": "dragapult", "ability": "clearbody", "item": "choicespecs",
+             "moves": ["shadowball", "dracometeor", "fireblast", "uturn"]},
+            {"species": "greattusk", "ability": "protosynthesis", "item": "boosterenergy",
+             "moves": ["earthquake", "closecombat", "icespinner", "rapidspin"]},
         ]
         legal, violations = constraints.is_team_legal(team)
         assert legal, f"Violations: {violations}"
@@ -49,8 +55,10 @@ class TestFormatConstraints:
     def test_smogon_allows_dupe_items(self):
         constraints = FormatConstraints("gen9ou")
         team = [
-            {"species": "garchomp", "item": "leftovers", "moves": []},
-            {"species": "clefable", "item": "leftovers", "moves": []},
+            {"species": "garchomp", "item": "leftovers",
+             "moves": ["earthquake", "dragonclaw", "swordsdance", "stealthrock"]},
+            {"species": "clefable", "item": "leftovers",
+             "moves": ["moonblast", "softboiled", "calmmind", "thunderwave"]},
         ]
         legal, violations = constraints.is_team_legal(team)
         assert legal

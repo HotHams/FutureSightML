@@ -230,9 +230,11 @@ class AppState:
         """Strip moves that don't exist in this gen or aren't learnable.
 
         Removes illegal moves from each set. Drops sets left with <2 moves.
+        Deduplicates identical sets (same species/ability/item/moves).
         """
         cleaned = []
         stripped_total = 0
+        seen_keys = set()
         for pset in pool:
             species = _to_id(pset.get("species", ""))
             moves = pset.get("moves", [])
@@ -249,9 +251,16 @@ class AppState:
             if len(valid_moves) >= 2:
                 pset = dict(pset)
                 pset["moves"] = valid_moves
+                key = (species,
+                       _to_id(pset.get("ability") or ""),
+                       _to_id(pset.get("item") or ""),
+                       tuple(sorted(_to_id(m) for m in valid_moves)))
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
                 cleaned.append(pset)
-        if stripped_total:
-            log.info("Gen %d pool validation: stripped %d illegal moves, %d -> %d sets",
+        if stripped_total or len(cleaned) < len(pool):
+            log.info("Gen %d pool validation: stripped %d illegal moves, deduped %d -> %d sets",
                      gen, stripped_total, len(pool), len(cleaned))
         return cleaned
 

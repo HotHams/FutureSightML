@@ -18,8 +18,17 @@ from ..teambuilder.spread_inference import apply_spreads
 from ..simulator import BattleSimulator, MonteCarloSimulator
 from ..utils.constants import extract_gen
 from ..utils.logging_config import setup_logging
+from ..config import get_data_root
 
-log = setup_logging("INFO")
+import sys as _sys
+if getattr(_sys, '_MEIPASS', None):
+    # PyInstaller bundle: _MEIPASS is read-only, write logs next to the executable
+    _log_dir = Path(_sys.executable).parent / "logs"
+else:
+    _log_dir = get_data_root() / "data" / "logs"
+_log_dir.mkdir(parents=True, exist_ok=True)
+_log_file = str(_log_dir / "server.log")
+log = setup_logging("INFO", log_file=_log_file)
 
 app_state = AppState()
 
@@ -40,7 +49,8 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:*", "http://127.0.0.1:*", "file://"],
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -88,10 +98,10 @@ class TeamRequest(BaseModel):
 
 class GenerateRequest(BaseModel):
     format_id: str = "gen9ou"
-    n_results: int = 5
-    population: int = 100
-    generations: int = 50
-    mutation_rate: float = 0.15
+    n_results: int = Field(5, ge=1, le=50)
+    population: int = Field(100, ge=10, le=500)
+    generations: int = Field(50, ge=5, le=200)
+    mutation_rate: float = Field(0.15, ge=0.0, le=1.0)
 
 
 class EvaluateRequest(BaseModel):
@@ -451,17 +461,20 @@ async def get_pokemon(pokemon_id: str):
     if not data:
         raise HTTPException(404, f"Pokemon '{pokemon_id}' not found")
 
-    # Get moves this Pokemon can learn
+    # Get moves this Pokemon can actually learn (from learnset data)
     learnable_moves = []
-    for move_id, move_data in app_state.pkmn_data.moves.items():
-        learnable_moves.append({
-            "id": move_id,
-            "name": move_data.get("name", move_id),
-            "type": move_data.get("type", ""),
-            "category": move_data.get("category", ""),
-            "basePower": move_data.get("basePower", 0),
-            "accuracy": move_data.get("accuracy", 0),
-        })
+    ls_entry = app_state.pkmn_data.learnsets.get(pid, {}).get("learnset", {})
+    for move_id in ls_entry:
+        move_data = app_state.pkmn_data.moves.get(move_id)
+        if move_data:
+            learnable_moves.append({
+                "id": move_id,
+                "name": move_data.get("name", move_id),
+                "type": move_data.get("type", ""),
+                "category": move_data.get("category", ""),
+                "basePower": move_data.get("basePower", 0),
+                "accuracy": move_data.get("accuracy", 0),
+            })
 
     return {
         "id": pid,
@@ -469,6 +482,7 @@ async def get_pokemon(pokemon_id: str):
         "types": data.get("types", []),
         "baseStats": data.get("baseStats", {}),
         "abilities": data.get("abilities", {}),
+        "moves": learnable_moves,
         "sprite": _sprite_url(pid),
         "sprite_ani": _sprite_url(pid, animated=True),
     }
@@ -558,6 +572,8 @@ async def get_format_stats(format_id: str):
 @app.post("/api/team/analyze/speed")
 async def analyze_speed_tiers(req: EvaluateRequest):
     """Analyze speed tiers for each team member."""
+    if not app_state.pkmn_data:
+        raise HTTPException(500, "Pokemon data not loaded")
     analyzer = TeamAnalyzer(pokemon_data=app_state.pkmn_data)
     team = [p.model_dump() for p in req.team]
     result = analyzer.speed_tier_analysis(team)
@@ -567,6 +583,8 @@ async def analyze_speed_tiers(req: EvaluateRequest):
 @app.post("/api/team/analyze/archetype")
 async def analyze_archetype(req: EvaluateRequest):
     """Detect the team's playstyle archetype."""
+    if not app_state.pkmn_data:
+        raise HTTPException(500, "Pokemon data not loaded")
     analyzer = TeamAnalyzer(pokemon_data=app_state.pkmn_data)
     team = [p.model_dump() for p in req.team]
     result = analyzer.detect_archetype(team)
@@ -576,6 +594,8 @@ async def analyze_archetype(req: EvaluateRequest):
 @app.post("/api/team/analyze/tera")
 async def analyze_tera(req: EvaluateRequest):
     """Suggest optimal tera types for each team member."""
+    if not app_state.pkmn_data:
+        raise HTTPException(500, "Pokemon data not loaded")
     fmt = req.format_id
     meta_teams = []
     if fmt in app_state.formats:
@@ -604,6 +624,8 @@ async def analyze_threats(req: EvaluateRequest):
 @app.post("/api/team/analyze/coverage")
 async def analyze_coverage(req: EvaluateRequest):
     """Analyze offensive and defensive type coverage."""
+    if not app_state.pkmn_data:
+        raise HTTPException(500, "Pokemon data not loaded")
     analyzer = TeamAnalyzer(pokemon_data=app_state.pkmn_data)
     team = [p.model_dump() for p in req.team]
     result = analyzer.coverage_analysis(team)
@@ -613,6 +635,8 @@ async def analyze_coverage(req: EvaluateRequest):
 @app.post("/api/team/analyze/strategy")
 async def analyze_strategy(req: EvaluateRequest):
     """Explain the team's strategy, roles, win conditions, and game plan."""
+    if not app_state.pkmn_data:
+        raise HTTPException(500, "Pokemon data not loaded")
     analyzer = TeamAnalyzer(pokemon_data=app_state.pkmn_data)
     team = [p.model_dump() for p in req.team]
     result = analyzer.explain_strategy(team)
@@ -622,6 +646,8 @@ async def analyze_strategy(req: EvaluateRequest):
 @app.post("/api/team/analyze/full")
 async def full_analysis(req: EvaluateRequest):
     """Run all analysis tools on a team at once."""
+    if not app_state.pkmn_data:
+        raise HTTPException(500, "Pokemon data not loaded")
     fmt = req.format_id
     analyzer = TeamAnalyzer(pokemon_data=app_state.pkmn_data)
     team = [p.model_dump() for p in req.team]
@@ -673,6 +699,8 @@ async def full_analysis(req: EvaluateRequest):
 @app.post("/api/team/head-to-head")
 async def head_to_head(req: HeadToHeadRequest):
     """Compute pairwise matchup matrix and win probability between two teams."""
+    if not app_state.pkmn_data:
+        raise HTTPException(500, "Pokemon data not loaded")
     fmt = req.format_id
     analyzer = TeamAnalyzer(pokemon_data=app_state.pkmn_data)
     team1 = [p.model_dump() for p in req.team1]
@@ -1083,7 +1111,10 @@ def _parse_showdown_paste(paste: str) -> list[dict]:
                     stat_map = {"HP": "hp", "Atk": "atk", "Def": "def",
                                 "SpA": "spa", "SpD": "spd", "Spe": "spe"}
                     if stat in stat_map:
-                        current["evs"][stat_map[stat]] = int(val.strip())
+                        try:
+                            current["evs"][stat_map[stat]] = int(val.strip())
+                        except ValueError:
+                            pass
         elif line.startswith("IVs:"):
             iv_str = line.split(":", 1)[1].strip()
             for part in iv_str.split("/"):
@@ -1093,7 +1124,10 @@ def _parse_showdown_paste(paste: str) -> list[dict]:
                     stat_map = {"HP": "hp", "Atk": "atk", "Def": "def",
                                 "SpA": "spa", "SpD": "spd", "Spe": "spe"}
                     if stat in stat_map:
-                        current["ivs"][stat_map[stat]] = int(val.strip())
+                        try:
+                            current["ivs"][stat_map[stat]] = int(val.strip())
+                        except ValueError:
+                            pass
         elif line.endswith("Nature"):
             current["nature"] = line.replace("Nature", "").strip()
         elif line.startswith("- "):

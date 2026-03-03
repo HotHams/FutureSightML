@@ -5,10 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>FutureSightML - Pokemon Team Builder</title>
     <link rel="icon" type="image/x-icon" href="/static/icon.ico" />
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com/3.4.1"></script>
+    <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone@7.24.0/babel.min.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
 
@@ -479,7 +479,7 @@ function ImportExportPanel({ team, format, onImport }) {
             const data = await res.json();
             if (data.team) onImport(data.team);
         } catch (e) {
-            alert('Import failed: ' + e.message);
+            showNotification('Import failed: ' + e.message, 'error');
         }
     }
 
@@ -494,7 +494,7 @@ function ImportExportPanel({ team, format, onImport }) {
             setExportText(data.paste);
             setMode('export');
         } catch (e) {
-            alert('Export failed: ' + e.message);
+            showNotification('Export failed: ' + e.message, 'error');
         }
     }
 
@@ -1103,7 +1103,7 @@ function UsageStatsPanel({ format }) {
     useEffect(() => {
         fetch(`${API}/meta/${format}`).then(r => r.json()).then(d => {
             setUsage(d.top_pokemon || []);
-        }).catch(() => {});
+        }).catch(() => showNotification('Failed to load metagame data', 'error'));
         setExpanded(null);
         setDetail(null);
     }, [format]);
@@ -1168,7 +1168,7 @@ function CounterPanel({ pokemon, format }) {
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ format_id: format, pokemon, n: 8 }),
         }).then(r => r.json()).then(d => { setData(d); setLoading(false); })
-          .catch(() => setLoading(false));
+          .catch(() => { setLoading(false); showNotification('Failed to load counters', 'error'); });
     }, [pokemon?.species, format]);
 
     if (!pokemon) return null;
@@ -1532,7 +1532,7 @@ function CompareModal({ format, team1, team2, onClose }) {
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ format_id: format, team1, team2 }),
         }).then(r => r.json()).then(d => { setData(d); setLoading(false); })
-          .catch(() => setLoading(false));
+          .catch(() => { setLoading(false); showNotification('Failed to compare teams', 'error'); });
     }, []);
 
     return (
@@ -1607,7 +1607,7 @@ function TierListPage({ format, onNavigateFormat }) {
 
     useEffect(() => {
         fetch(`${API}/formats/tier-list`).then(r => r.json()).then(d => { setData(d); setLoading(false); })
-            .catch(() => setLoading(false));
+            .catch(() => { setLoading(false); showNotification('Failed to load tier list', 'error'); });
     }, []);
 
     if (loading) return <div className="flex items-center justify-center py-20"><div className="pokeball-spinner" /></div>;
@@ -1710,6 +1710,10 @@ function App() {
     const [notification, setNotification] = useState(null);
     const [selectedSlot, setSelectedSlot] = useState(null);
     const [compareTeams, setCompareTeams] = useState(null);
+    const [showPrivacy, setShowPrivacy] = useState(false);
+    const [showOnboarding, setShowOnboarding] = useState(() => {
+        return !localStorage.getItem('fsml_onboarded');
+    });
     const [darkMode, setDarkMode] = useState(() => {
         const saved = localStorage.getItem('retro-dark-mode');
         return saved !== null ? saved === 'true' : true;
@@ -1723,7 +1727,8 @@ function App() {
     }, [darkMode]);
 
     useEffect(() => {
-        fetch(`${API}/formats`).then(r => r.json()).then(d => setFormats(d.formats || [])).catch(() => {});
+        fetch(`${API}/formats`).then(r => r.json()).then(d => setFormats(d.formats || []))
+            .catch(() => showNotification('Server not responding — is the backend running?', 'error'));
     }, []);
 
     // F4: URL hash team sharing — decode on load
@@ -1879,8 +1884,41 @@ function App() {
     const filledTeam = team.filter(Boolean);
     const selectedPokemon = selectedSlot !== null && team[selectedSlot] ? team[selectedSlot] : null;
 
+    const dismissOnboarding = () => {
+        localStorage.setItem('fsml_onboarded', '1');
+        setShowOnboarding(false);
+    };
+
     return (
         <div className="min-h-screen">
+            {showOnboarding && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center" style={{background:'rgba(0,0,0,0.75)', backdropFilter:'blur(4px)'}}>
+                    <div className="retro-panel p-6 max-w-md w-full mx-4 fade-in">
+                        <div className="retro-panel-header text-center text-sm">Welcome to FutureSightML</div>
+                        <p className="text-center mb-4 mt-2" style={{fontSize:'9px',lineHeight:'1.8'}}>
+                            ML-powered Pokemon team builder that predicts win rates before a battle begins.
+                        </p>
+                        <div className="space-y-3 mb-5">
+                            <div className="flex items-start gap-3 p-2 bg-dark-700">
+                                <span className="text-accent font-bold text-lg mt-0.5">1</span>
+                                <div><span className="font-bold">Pick a format</span><br/>Choose from 129 formats across Gens 1-9</div>
+                            </div>
+                            <div className="flex items-start gap-3 p-2 bg-dark-700">
+                                <span className="text-accent font-bold text-lg mt-0.5">2</span>
+                                <div><span className="font-bold">Build your team</span><br/>Generate with AI, import, or add Pokemon manually</div>
+                            </div>
+                            <div className="flex items-start gap-3 p-2 bg-dark-700">
+                                <span className="text-accent font-bold text-lg mt-0.5">3</span>
+                                <div><span className="font-bold">See predictions</span><br/>Get win rates, matchup analysis, and optimization tips</div>
+                            </div>
+                        </div>
+                        <button onClick={dismissOnboarding}
+                            className="w-full bg-accent hover:bg-red-700 text-white font-bold py-2 text-sm">
+                            Got it!
+                        </button>
+                    </div>
+                </div>
+            )}
             {/* Header */}
             <header className="retro-panel sticky top-0 z-50">
                 <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
@@ -2029,7 +2067,32 @@ function App() {
                 {page === 'h2h' && <HeadToHeadPage format={format} myTeam={team} />}
                 {page === 'dmgcalc' && <DamageCalcPage format={format} myTeam={team} />}
                 {page === 'tierlist' && <TierListPage format={format} onNavigateFormat={(f) => { setFormat(f); setPage('meta'); }} />}
+
+                <footer className="text-center py-4 mt-8 text-[8px] text-gray-500">
+                    <button onClick={() => setShowPrivacy(true)} className="underline hover:text-gray-300 bg-transparent border-none cursor-pointer" style={{fontSize:'8px'}}>Privacy</button>
+                    <span className="mx-2">|</span>
+                    <a href="https://github.com/HotHams/FutureSightML" target="_blank" rel="noopener" className="underline hover:text-gray-300">GitHub</a>
+                </footer>
             </main>
+
+            {showPrivacy && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center" style={{background:'rgba(0,0,0,0.75)'}} onClick={() => setShowPrivacy(false)}>
+                    <div className="retro-panel p-6 max-w-lg w-full mx-4 max-h-[70vh] overflow-y-auto fade-in" onClick={e => e.stopPropagation()}>
+                        <div className="retro-panel-header flex items-center justify-between">
+                            <span>Privacy</span>
+                            <button onClick={() => setShowPrivacy(false)} className="text-white hover:text-accent bg-transparent border-none cursor-pointer">X</button>
+                        </div>
+                        <div className="space-y-3 mt-2" style={{fontSize:'9px',lineHeight:'1.8'}}>
+                            <p className="font-bold">FutureSightML is fully local.</p>
+                            <p><span className="text-accent">All ML inference runs on your machine.</span> No team data is sent to any external server.</p>
+                            <p>Your SQLite database of replays stays in your local data/ directory and is never uploaded.</p>
+                            <p>No accounts, no analytics, no telemetry.</p>
+                            <p className="font-bold mt-3">What accesses the internet:</p>
+                            <p>Replay scraping fetches public data from the Pokemon Showdown replay API. Sprites load from play.pokemonshowdown.com. No user data is sent.</p>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
