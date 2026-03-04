@@ -454,7 +454,7 @@ class FeatureExtractor:
 
             # Effective power = best BP * stat * item_mult * ability_mult
             phys_mult = get_item_atk_mult(item_id, True) * get_ability_atk_mult(ability_id)
-            spec_mult = get_item_atk_mult(item_id, False)
+            spec_mult = get_item_atk_mult(item_id, False) * get_ability_atk_mult(ability_id)
             feats[61] = (best_phys_bp * atk_stat * phys_mult) / 60000.0
             feats[62] = (best_spec_bp * spa_stat * spec_mult) / 60000.0
 
@@ -1462,7 +1462,7 @@ class FeatureExtractor:
             spe = base.get("spe", 80)
 
             phys_mult = get_item_atk_mult(item_id, True) * get_ability_atk_mult(ability_id)
-            spec_mult = get_item_atk_mult(item_id, False)
+            spec_mult = get_item_atk_mult(item_id, False) * get_ability_atk_mult(ability_id)
             dmg_mult = get_item_damage_mult(item_id)
 
             best_phys = 0
