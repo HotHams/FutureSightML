@@ -14,16 +14,16 @@ Pre-game win prediction from team composition alone (held-out test set, no ratin
 
 | Format | Neural AUC | XGB AUC | Ensemble (N/X) |
 |---|---|---|---|
-| Gen 9 OU | 0.7592 | 0.6872 | 90/10 |
-| Gen 9 UU | 0.7570 | 0.6927 | 70/30 |
-| Gen 9 RU | 0.7743 | 0.7219 | 80/20 |
-| Gen 9 NU | 0.7515 | 0.7047 | 85/15 |
-| Gen 9 Ubers | 0.8079 | 0.7519 | 90/10 |
-| Gen 9 VGC 2026 | 0.7391 | 0.7106 | 80/20 |
-| Gen 9 Doubles OU | 0.7555 | 0.7189 | 75/25 |
-| Gen 1 OU | 0.8134 | 0.8023 | 65/35 |
-| Gen 2 OU | 0.7367 | 0.7545 | 45/55 |
-| Gen 3 OU | 0.8544 | 0.8273 | 65/35 |
+| Gen 9 OU | 0.7588 | 0.6878 | 75/25 |
+| Gen 9 UU | 0.7561 | 0.6915 | 70/30 |
+| Gen 9 RU | 0.7723 | 0.7221 | 85/15 |
+| Gen 9 NU | 0.7471 | 0.7047 | 80/20 |
+| Gen 9 Ubers | 0.8140 | 0.7519 | 80/20 |
+| Gen 9 VGC 2026 | 0.7371 | 0.7106 | 70/30 |
+| Gen 9 Doubles OU | 0.7506 | 0.7196 | 85/15 |
+| Gen 1 OU | 0.8098 | 0.8023 | 55/45 |
+| Gen 2 OU | 0.7329 | 0.7545 | 25/75 |
+| Gen 3 OU | 0.8543 | 0.8272 | 65/35 |
 
 All numbers are team-only AUC on a held-out test set with equalized ratings (no Elo leakage). For context: Dota 2 draft prediction AUC is 0.66-0.71, Hearthstone deck prediction AUC is 0.65-0.68.
 
@@ -48,21 +48,42 @@ XGBoost (618+ engineered features) ───────────────
 
 ## Quick Start
 
+### Desktop App
+
+Download pre-built binaries from [Releases](https://github.com/HotHams/FutureSightML/releases). Runs out of the box — no Python required.
+
+### From Source
+
 ```bash
 # Clone and install
 git clone https://github.com/HotHams/FutureSightML.git
 cd FutureSightML
 pip install -e .
 
-# Start the server
-python scripts/run_server.py
+# Download pre-trained models (~310 MB)
+python scripts/download_models.py
 
-# Open http://localhost:8000 in your browser
+# Start the server (opens browser automatically)
+python scripts/run_server.py
 ```
 
-## Desktop App
+Everything runs locally. Nothing leaves your machine.
 
-Download pre-built binaries from [Releases](https://github.com/HotHams/FutureSightML/releases), or build from source:
+## What You Get
+
+- **Win rate prediction** — Paste or build a team, see its predicted win rate against the current metagame
+- **Team generator** — A genetic algorithm evolves teams to maximize predicted win rate
+- **Team analysis** — Type coverage, speed tiers, threat matchups, archetype classification
+- **Battle simulator** — Monte Carlo battle simulation with turn-by-turn replay
+- **Full API** — FastAPI backend with auto-generated docs at `/docs`
+
+## Supported Formats
+
+129 formats across Generations 1-9, including OU, UU, RU, NU, Ubers, VGC, Doubles OU, LC, Monotype, National Dex, and more. See `config.yaml` for the full list.
+
+Pre-trained models ship for the 11 most popular formats. All other formats have metagame pools and can be trained with additional replay data.
+
+## Building the Desktop App
 
 ```bash
 python scripts/build_exe.py
@@ -70,21 +91,15 @@ python scripts/build_exe.py
 
 This builds the PyInstaller backend + Electron frontend into a standalone desktop app.
 
-## Training Your Own Models
+## API
 
-```bash
-# 1. Scrape replays from Pokemon Showdown
-python scripts/scrape.py --format gen9ou --count 10000
+The FastAPI server provides auto-generated docs at [http://localhost:8000/docs](http://localhost:8000/docs).
 
-# 2. (Optional) Import bulk data from HuggingFace
-python scripts/import_huggingface.py --gen 9
-
-# 3. Train models for all configured formats
-python scripts/train_all_formats.py
-
-# 4. Start the server with your models
-python scripts/run_server.py
-```
+Key endpoints:
+- `POST /api/team/generate` - Generate an optimized team for a format
+- `POST /api/team/analyze/full` - Analyze a team's predicted win rate and matchups
+- `GET /api/meta/{format}` - Get metagame usage statistics
+- `POST /api/battle/simulate` - Monte Carlo battle simulation
 
 ## Project Structure
 
@@ -101,31 +116,15 @@ FutureSightML/
 ├── gui/                       # Electron + React frontend
 │   └── static/index.html      # Single-file React app with retro UI
 ├── scripts/                   # CLI entry points
-│   ├── train.py               # Train a single format
-│   ├── train_all_formats.py   # Train all configured formats
-│   ├── scrape.py              # Scrape replays
 │   ├── run_server.py          # Start the API server
+│   ├── download_models.py     # Download pre-trained models
 │   ├── build_exe.py           # Build desktop app
-│   └── import_huggingface.py  # Import bulk replay dataset
-├── data/                      # SQLite DB, model checkpoints, vocab files
-├── tests/                     # Test suite
+│   └── train_model.py         # Train models (for development)
+├── data/                      # Model checkpoints, pool data
+├── tests/                     # Test suite (90 tests)
 ├── config.yaml                # Format and training configuration
 └── FutureSightML.spec         # PyInstaller build spec
 ```
-
-## API
-
-The FastAPI server provides auto-generated docs at [http://localhost:8000/docs](http://localhost:8000/docs).
-
-Key endpoints:
-- `POST /api/team/generate` - Generate an optimized team for a format
-- `POST /api/team/analyze/full` - Analyze a team's predicted win rate and matchups
-- `GET /api/meta/{format}` - Get metagame usage statistics
-- `POST /api/battle/simulate` - Monte Carlo battle simulation
-
-## Supported Formats
-
-129 formats across Generations 1-9, including OU, UU, RU, NU, Ubers, VGC, Doubles OU, LC, Monotype, and more. See `config.yaml` for the full list.
 
 ## Contributing
 

@@ -25,6 +25,15 @@ def main():
     parser.add_argument("--reload", action="store_true", help="Auto-reload on code changes")
     args = parser.parse_args()
 
+    # Check for pre-trained models
+    project_root = Path(__file__).resolve().parent.parent
+    checkpoints = list((project_root / "data" / "checkpoints").glob("neural_*_best.pt"))
+    if not checkpoints:
+        print("\n  No pre-trained models found in data/checkpoints/")
+        print("  Run: python scripts/download_models.py")
+        print()
+        sys.exit(1)
+
     if not args.no_browser:
         import threading
         def open_browser():
