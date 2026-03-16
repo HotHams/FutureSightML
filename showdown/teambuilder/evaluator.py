@@ -132,8 +132,8 @@ class TeamEvaluator:
         matchups.sort(key=lambda m: m["win_prob"])
 
         return {
-            "overall_winrate": matchup_winrate,
-            "mean_probability": mean_prob,
+            "overall_winrate": mean_prob,
+            "matchup_spread": matchup_winrate,
             "worst_matchups": matchups[:5],
             "best_matchups": matchups[-5:],
             "total_matchups": len(matchups),
