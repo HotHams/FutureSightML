@@ -61,19 +61,9 @@ a = Analysis(
         (str(project_root / 'config.yaml'), '.'),
         # GUI static files (served by FastAPI)
         (str(project_root / 'gui' / 'static'), 'gui/static'),
-    ] + (
-        # Pre-exported pool data (optional — CI builds may lack models)
-        [(str(project_root / 'data' / 'pools'), 'data/pools')]
-        if (project_root / 'data' / 'pools').exists()
-        and any((project_root / 'data' / 'pools').glob('*.json'))
-        else []
-    ) + (
-        # Model checkpoints (optional — CI builds may lack models)
-        [(str(project_root / 'data' / 'checkpoints'), 'data/checkpoints')]
-        if (project_root / 'data' / 'checkpoints').exists()
-        and any((project_root / 'data' / 'checkpoints').iterdir())
-        else []
-    ) + _xgb_datas,
+        # Download script (for auto-download on first launch)
+        (str(project_root / 'scripts' / 'download_models.py'), 'scripts'),
+    ] + _xgb_datas,
     hiddenimports=[
         # Uvicorn internals
         'uvicorn',
@@ -137,6 +127,8 @@ a = Analysis(
         'showdown.utils',
         'showdown.utils.constants',
         'showdown.utils.logging_config',
+        # Auto-download script
+        'scripts.download_models',
         # ML libraries
         'torch',
         'torch.nn',

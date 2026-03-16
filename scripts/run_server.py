@@ -25,14 +25,51 @@ def main():
     parser.add_argument("--reload", action="store_true", help="Auto-reload on code changes")
     args = parser.parse_args()
 
-    # Check for pre-trained models
+    # Check for pre-trained models — auto-download if missing
     project_root = Path(__file__).resolve().parent.parent
-    checkpoints = list((project_root / "data" / "checkpoints").glob("neural_*_best.pt"))
+    # Support PyInstaller frozen exe
+    if getattr(sys, '_MEIPASS', None):
+        project_root = Path(sys.executable).parent
+    checkpoints_dir = project_root / "data" / "checkpoints"
+    checkpoints_dir.mkdir(parents=True, exist_ok=True)
+    checkpoints = list(checkpoints_dir.glob("neural_*_best.pt"))
     if not checkpoints:
-        print("\n  No pre-trained models found in data/checkpoints/")
-        print("  Run: python scripts/download_models.py")
-        print()
-        sys.exit(1)
+        print("\n  No pre-trained models found. Downloading (~310 MB)...")
+        try:
+            def get_download_url():
+                return "https://huggingface.co/HotHams/FutureSightML/resolve/main/model-data.tar.gz"
+            import io, tarfile, urllib.request
+            url = get_download_url()
+            print(f"  Fetching from {url}")
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req) as resp:
+                total = int(resp.headers.get("Content-Length", 0))
+                downloaded = 0
+                chunks = []
+                while True:
+                    chunk = resp.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    downloaded += len(chunk)
+                    if total > 0:
+                        pct = downloaded * 100 // total
+                        mb = downloaded // (1024 * 1024)
+                        total_mb = total // (1024 * 1024)
+                        print(f"\r  {mb}/{total_mb} MB ({pct}%)", end="", flush=True)
+                print()
+                data = b"".join(chunks)
+            print("  Extracting...")
+            buf = io.BytesIO(data)
+            with tarfile.open(fileobj=buf, mode="r:gz") as tar:
+                tar.extractall(path=project_root)
+            n = len(list(checkpoints_dir.glob("neural_*_best.pt")))
+            print(f"  Done! {n} models downloaded.\n")
+        except Exception as e:
+            print(f"\n  Auto-download failed: {e}")
+            print("  Run manually: python scripts/download_models.py")
+            print()
+            sys.exit(1)
 
     if not args.no_browser:
         import threading

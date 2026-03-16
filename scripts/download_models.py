@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download pre-trained models and pool data from GitHub Releases.
+"""Download pre-trained models and pool data from HuggingFace.
 
 Usage:
     python scripts/download_models.py
@@ -11,24 +11,17 @@ import tarfile
 import urllib.request
 from pathlib import Path
 
-REPO = "HotHams/FutureSightML"
+HF_REPO = "HotHams/FutureSightML"
 ASSET_NAME = "model-data.tar.gz"
 
-def get_latest_release_url() -> str:
-    """Get the download URL for model-data.tar.gz from the latest release."""
-    api_url = f"https://api.github.com/repos/{REPO}/releases/latest"
-    req = urllib.request.Request(api_url, headers={"Accept": "application/vnd.github.v3+json"})
-    try:
-        import json
-        with urllib.request.urlopen(req) as resp:
-            data = json.loads(resp.read())
-        for asset in data.get("assets", []):
-            if asset["name"] == ASSET_NAME:
-                return asset["browser_download_url"]
-    except Exception:
-        pass
-    # Fallback: construct URL from latest tag
-    return f"https://github.com/{REPO}/releases/latest/download/{ASSET_NAME}"
+
+def get_download_url() -> str:
+    """Get the download URL for model-data.tar.gz.
+
+    Primary: HuggingFace model repo (no size limits, fast CDN).
+    Fallback: GitHub release.
+    """
+    return f"https://huggingface.co/{HF_REPO}/resolve/main/{ASSET_NAME}"
 
 
 def main():
@@ -45,7 +38,7 @@ def main():
             print("Skipped.")
             return
 
-    url = get_latest_release_url()
+    url = get_download_url()
     print(f"Downloading models from {url} ...")
     print("(This is ~310 MB, may take a few minutes)")
 
@@ -70,7 +63,7 @@ def main():
             data = b"".join(chunks)
     except Exception as e:
         print(f"\nDownload failed: {e}")
-        print(f"You can manually download from: https://github.com/{REPO}/releases")
+        print(f"You can manually download from: https://huggingface.co/{HF_REPO}")
         sys.exit(1)
 
     print("Extracting...")
