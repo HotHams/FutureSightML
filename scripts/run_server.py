@@ -27,9 +27,9 @@ def main():
 
     # Check for pre-trained models — auto-download if missing
     project_root = Path(__file__).resolve().parent.parent
-    # Support PyInstaller frozen exe
+    # Support PyInstaller frozen exe — data lives in _MEIPASS/_internal
     if getattr(sys, '_MEIPASS', None):
-        project_root = Path(sys.executable).parent
+        project_root = Path(sys._MEIPASS)
     checkpoints_dir = project_root / "data" / "checkpoints"
     checkpoints_dir.mkdir(parents=True, exist_ok=True)
     checkpoints = list(checkpoints_dir.glob("neural_*_best.pt"))
