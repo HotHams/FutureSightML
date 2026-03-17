@@ -417,6 +417,13 @@ class FeatureExtractor:
 
         # Item category [36-39]
         item_id = _to_id(pkmn.get("item", "") or "")
+        # Infer Mega Stone from species if item is missing (species proves the item)
+        if not item_id and self.gen in (6, 7):
+            from .mechanics import MEGA_STONES
+            _MEGA_SPECIES_TO_STONE = {v["mega_species"]: k for k, v in MEGA_STONES.items()}
+            inferred = _MEGA_SPECIES_TO_STONE.get(species_id)
+            if inferred:
+                item_id = inferred
         feats[36] = 1.0 if is_choice_item(item_id) else 0.0
         feats[37] = 1.0 if item_id == "lifeorb" else 0.0
         feats[38] = 1.0 if item_id in ("heavydutyboots", "leftovers", "blacksludge") else 0.0
@@ -1712,11 +1719,20 @@ class FeatureExtractor:
         tera_types = set()
         tera_new_stab = 0
 
+        from .mechanics import MEGA_STONES
+        _MEGA_SPECIES_TO_STONE = {v["mega_species"]: k for k, v in MEGA_STONES.items()}
+
         for pkmn in team:
             if not pkmn:
                 continue
             item_id = _to_id(pkmn.get("item") or "")
             species_id = _to_id(pkmn.get("species", ""))
+
+            # Infer Mega Stone from species name if item is missing
+            if not item_id and self.gen in (6, 7):
+                inferred = _MEGA_SPECIES_TO_STONE.get(species_id)
+                if inferred:
+                    item_id = inferred
 
             # Mega (Gen 6-7)
             if self.gen in (6, 7) and is_mega_stone(item_id):
