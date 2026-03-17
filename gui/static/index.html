@@ -220,6 +220,35 @@ function StatBar({ label, value, max = 255 }) {
 
 function spriteId(species) {
     let name = (species || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const noSplit = new Set([
+        'regice','regirock','registeel','regieleki','regidrago',
+        'glastrier','spectrier','froslass','snorunt','avalugg',
+        'dewgong','sealeo','walrein','beartic','crabominable',
+        'sandshrew','sandslash','geodude','graveler','golem',
+        'hippopotas','hippowdon','palossand','sandaconda',
+        'marowak','cubone','donphan','flygon','krookodile',
+        'gastrodon','shellos','quagsire','swampert','whiscash',
+        'politoed','poliwrath','golduck','starmie','cloyster',
+        'lanturn','wishiwashi','araquanid','dracovish',
+        'electrode','magneton','magnezone','electivire',
+        'jolteon','luxray','manectric','rotomheat','rotomwash',
+        'rotomfrost','rotomfan','rotommow',
+        'heatran','magcargo','torkoal','chandelure','volcarona',
+        'darmanitan','blaziken','infernape','arcanine',
+        'breloom','abomasnow','ferrothorn','tangrowth',
+        'exeggutor','leafeon','roserade','venusaur',
+        'umbreon','absol','bisharp','pangoro','incineroar',
+        'tyranitar','hydreigon','darkrai','zarude',
+        'lucario','machamp','conkeldurr','sirfetchd',
+        'toxicroak','salazzle','nihilego','naganadel',
+        'metagross','scizor','ferrothorn','excadrill',
+        'gardevoir','alakazam','espeon','reuniclus',
+        'aerodactyl','lycanroc','tyrantrum','archeops',
+        'drifblim','gengar','chandelure','mimikyu',
+        'dragonite','salamence','garchomp','goodra',
+        'clefable','sylveon','primarina','tapulele',
+    ]);
+    if (noSplit.has(name)) return name;
     const suffixes = [
         'alola','galar','hisui','paldea',
         'megax','megay','mega',

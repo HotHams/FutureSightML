@@ -231,6 +231,18 @@ class MetaAnalyzer:
             team.append(pkmn_set)
             used_species.add(species)
 
+        # Pad to 6 if synergy-weighted sampling fell short
+        while len(team) < 6 and len(used_species) < len(pool_species):
+            remaining = [(i, usage_probs[i]) for i, sp in enumerate(pool_species) if sp not in used_species]
+            if not remaining:
+                break
+            idxs, wts = zip(*remaining)
+            idx = random.choices(idxs, weights=wts, k=1)[0]
+            species = pool_species[idx]
+            pkmn_set = self._build_pokemon_set(species, usage.get(species, {}))
+            team.append(pkmn_set)
+            used_species.add(species)
+
         return team
 
     def _build_pokemon_set(self, species: str, data: dict) -> dict:
