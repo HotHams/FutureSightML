@@ -8,6 +8,8 @@
 
 FutureSightML uses a neural transformer encoder with a pairwise matchup matrix branch, combined with an XGBoost ensemble, to evaluate Pokemon teams before a single move is made. It ships pre-trained models for **62 competitive formats across Generations 1-9** and includes a retro-styled desktop GUI, a FastAPI backend, and a genetic algorithm team builder.
 
+![FutureSightML GUI](docs/screenshot_post.png)
+
 ## Key Numbers
 
 Pre-game win prediction from team composition alone (held-out test set, no rating leakage):
