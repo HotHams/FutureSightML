@@ -190,7 +190,7 @@ model:
   team_hidden_dim: 256
   attention_heads: 4
   dropout: 0.35
-  continuous_dim: 64
+  continuous_dim: 72
   transformer_layers: 3
   use_cross_attention: true
   rating_dim: 6
