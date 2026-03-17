@@ -56,9 +56,11 @@ XGBoost (618+ engineered features) ───────────────
 
 ## Quick Start
 
-### Desktop App
+### Desktop App (Windows)
 
-Download pre-built binaries from [Releases](https://github.com/HotHams/FutureSightML/releases). Runs out of the box — no Python required.
+[Download from HuggingFace](https://huggingface.co/HotHams/FutureSightML/resolve/main/FutureSightML-win-x64.zip) (~3 GB). Extract, run `FutureSightML.exe`. Models download automatically on first launch.
+
+Requires Windows 10+ and an NVIDIA GPU (CUDA) for best performance.
 
 ### From Source
 
