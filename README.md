@@ -83,10 +83,15 @@ Everything runs locally. Nothing leaves your machine.
 
 ## What You Get
 
-- **Win rate prediction** — Paste or build a team, see its predicted win rate against the current metagame
-- **Team generator** — A genetic algorithm evolves teams to maximize predicted win rate
-- **Team analysis** — Type coverage, speed tiers, threat matchups, archetype classification
+- **Team generator** — A genetic algorithm evolves teams to maximize predicted win rate against the metagame
+- **Win rate prediction** — Paste or build a team, see its predicted win rate and matchup spread
+- **Deep analysis** — Archetype detection, team roles, win conditions, game plan, speed tiers, type coverage, Tera suggestions, and top threats
+- **Head-to-head** — Pit any two teams against each other for a win probability breakdown
+- **Damage calculator** — Calculate damage between any two Pokemon with full move/item/ability context
+- **Metagame overview** — Usage statistics, top Pokemon, common sets, items, and abilities per format
+- **Cross-format tier list** — Compare Pokemon viability across all supported formats at a glance
 - **Battle simulator** — Monte Carlo battle simulation with turn-by-turn replay
+- **Import/Export** — Paste Showdown teams in, export generated teams out
 - **Full API** — FastAPI backend with auto-generated docs at `/docs`
 
 ## Supported Formats
