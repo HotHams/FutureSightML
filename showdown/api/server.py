@@ -593,10 +593,14 @@ async def analyze_archetype(req: EvaluateRequest):
 
 @app.post("/api/team/analyze/tera")
 async def analyze_tera(req: EvaluateRequest):
-    """Suggest optimal tera types for each team member."""
+    """Suggest optimal tera types for each team member (Gen 9 only)."""
     if not app_state.pkmn_data:
         raise HTTPException(500, "Pokemon data not loaded")
     fmt = req.format_id
+    from showdown.utils.constants import extract_gen
+    gen = extract_gen(fmt)
+    if gen < 9:
+        return {"format": fmt, "tera_suggestions": [], "note": "Terastallization is Gen 9 only"}
     meta_teams = []
     if fmt in app_state.formats:
         meta_teams = app_state.formats[fmt].meta_teams
@@ -657,9 +661,10 @@ async def full_analysis(req: EvaluateRequest):
         meta_teams = app_state.formats[fmt].meta_teams
 
     # Run all analyses
+    from showdown.utils.constants import extract_gen
+    gen = extract_gen(fmt)
     speed = analyzer.speed_tier_analysis(team)
     archetype = analyzer.detect_archetype(team)
-    tera = analyzer.optimize_tera_types(team, meta_teams)
     coverage = analyzer.coverage_analysis(team)
     strategy = analyzer.explain_strategy(team)
 
@@ -667,10 +672,13 @@ async def full_analysis(req: EvaluateRequest):
         "format": fmt,
         "speed_tiers": speed,
         "archetype": archetype,
-        "tera_suggestions": tera,
         "coverage": coverage,
         "strategy": strategy,
     }
+
+    # Gen 9 only: Tera suggestions
+    if gen >= 9:
+        result["tera_suggestions"] = analyzer.optimize_tera_types(team, meta_teams)
 
     # Add threat analysis if meta teams available
     if meta_teams:
