@@ -1956,8 +1956,8 @@ function App() {
                                 });
                                 return Object.entries(grouped).sort(([a],[b]) => +a - +b).map(([g, fmts]) => (
                                     <optgroup key={g} label={`Generation ${g}`}>
-                                        {fmts.map(f => (
-                                            <option key={f.id} value={f.id}>{prettyName(f.id)}{f.has_model ? '' : ' (no model)'}</option>
+                                        {fmts.filter(f => f.has_model).map(f => (
+                                            <option key={f.id} value={f.id}>{prettyName(f.id)}</option>
                                         ))}
                                     </optgroup>
                                 ));
