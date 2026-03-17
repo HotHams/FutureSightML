@@ -101,7 +101,7 @@ class WinPredictor(nn.Module):
         team_dim: int = 256,
         attention_heads: int = 4,
         dropout: float = 0.2,
-        continuous_dim: int = 64,
+        continuous_dim: int = 72,
         rating_dim: int = 6,
     ):
         super().__init__()

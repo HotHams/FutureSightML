@@ -141,6 +141,96 @@ ITEM_EFFECTS: dict[str, dict[str, Any]] = {
     "occaberry":    {"resists_type": "Fire", "resist_mult": 0.5, "is_berry": True, "category": "resist_berry"},
     "roseliberry":  {"resists_type": "Fairy", "resist_mult": 0.5, "is_berry": True, "category": "resist_berry"},
     "chilanberry":  {"resists_type": "Normal", "resist_mult": 0.5, "is_berry": True, "category": "resist_berry"},
+
+    # --- Mega Stones (Gen 6-7, all 48 canonical) ---
+    "venusaurite":       {"category": "mega_stone"},
+    "charizarditex":     {"category": "mega_stone"},
+    "charizarditey":     {"category": "mega_stone"},
+    "blastoisinite":     {"category": "mega_stone"},
+    "alakazite":         {"category": "mega_stone"},
+    "gengarite":         {"category": "mega_stone"},
+    "kangaskhanite":     {"category": "mega_stone"},
+    "pinsirite":         {"category": "mega_stone"},
+    "gyaradosite":       {"category": "mega_stone"},
+    "aerodactylite":     {"category": "mega_stone"},
+    "mewtwonitex":       {"category": "mega_stone"},
+    "mewtwonitey":       {"category": "mega_stone"},
+    "ampharosite":       {"category": "mega_stone"},
+    "scizorite":         {"category": "mega_stone"},
+    "heracronite":       {"category": "mega_stone"},
+    "houndoominite":     {"category": "mega_stone"},
+    "tyranitarite":      {"category": "mega_stone"},
+    "blazikenite":       {"category": "mega_stone"},
+    "gardevoirite":      {"category": "mega_stone"},
+    "mawilite":          {"category": "mega_stone"},
+    "aggronite":         {"category": "mega_stone"},
+    "medichamite":       {"category": "mega_stone"},
+    "manectite":         {"category": "mega_stone"},
+    "banettite":         {"category": "mega_stone"},
+    "absolite":          {"category": "mega_stone"},
+    "garchompite":       {"category": "mega_stone"},
+    "lucarionite":       {"category": "mega_stone"},
+    "abomasite":         {"category": "mega_stone"},
+    "latiasite":         {"category": "mega_stone"},
+    "latiosite":         {"category": "mega_stone"},
+    "swampertite":       {"category": "mega_stone"},
+    "sceptilite":        {"category": "mega_stone"},
+    "sablenite":         {"category": "mega_stone"},
+    "altarianite":       {"category": "mega_stone"},
+    "galladite":         {"category": "mega_stone"},
+    "audinite":          {"category": "mega_stone"},
+    "metagrossite":      {"category": "mega_stone"},
+    "sharpedonite":      {"category": "mega_stone"},
+    "slowbronite":       {"category": "mega_stone"},
+    "steelixite":        {"category": "mega_stone"},
+    "pidgeotite":        {"category": "mega_stone"},
+    "glalitite":         {"category": "mega_stone"},
+    "diancite":          {"category": "mega_stone"},
+    "cameruptite":       {"category": "mega_stone"},
+    "lopunnite":         {"category": "mega_stone"},
+    "salamencite":       {"category": "mega_stone"},
+    "beedrillite":       {"category": "mega_stone"},
+    # Primal Reversion orbs (functionally equivalent to Mega Stones)
+    "redorb":            {"category": "mega_stone"},
+    "blueorb":           {"category": "mega_stone"},
+
+    # --- Z-Crystals (Gen 7) — type-specific ---
+    "normaliumz":        {"category": "z_crystal"},
+    "firiumz":           {"category": "z_crystal"},
+    "wateriumz":         {"category": "z_crystal"},
+    "electriumz":        {"category": "z_crystal"},
+    "grassiumz":         {"category": "z_crystal"},
+    "iciumz":            {"category": "z_crystal"},
+    "fightiniumz":       {"category": "z_crystal"},
+    "poisoniumz":        {"category": "z_crystal"},
+    "groundiumz":        {"category": "z_crystal"},
+    "flyiniumz":         {"category": "z_crystal"},
+    "psychiumz":         {"category": "z_crystal"},
+    "buginiumz":         {"category": "z_crystal"},
+    "rockiumz":          {"category": "z_crystal"},
+    "ghostiumz":         {"category": "z_crystal"},
+    "dragoniumz":        {"category": "z_crystal"},
+    "darkiniumz":        {"category": "z_crystal"},
+    "steeliumz":         {"category": "z_crystal"},
+    "fairiumz":          {"category": "z_crystal"},
+    # Z-Crystals — species-specific
+    "pikaniumz":         {"category": "z_crystal"},
+    "aloraichiumz":      {"category": "z_crystal"},
+    "decidiumz":         {"category": "z_crystal"},
+    "inciniumz":         {"category": "z_crystal"},
+    "primariumz":        {"category": "z_crystal"},
+    "tapuniumz":         {"category": "z_crystal"},
+    "marshadiumz":       {"category": "z_crystal"},
+    "snorliumz":         {"category": "z_crystal"},
+    "eeviumz":           {"category": "z_crystal"},
+    "mewniumz":          {"category": "z_crystal"},
+    "pikashuniumz":      {"category": "z_crystal"},
+    "lycaniumz":         {"category": "z_crystal"},
+    "mimikiumz":         {"category": "z_crystal"},
+    "kommoniumz":        {"category": "z_crystal"},
+    "solganiumz":        {"category": "z_crystal"},
+    "lunaliumz":         {"category": "z_crystal"},
+    "ultranecroziumz":   {"category": "z_crystal"},
 }
 
 
@@ -314,6 +404,263 @@ ABILITY_EFFECTS: dict[str, dict[str, Any]] = {
     "darkaura":      {"type_aura": "Dark", "aura_mult": 1.33, "category": "aura"},
     "aurabreak":     {"aura_invert": True, "category": "aura"},
 }
+
+
+# ===================================================================
+# MEGA STONES REGISTRY (Gen 6-7)
+# ===================================================================
+# Maps mega stone item ID -> species info. 46 Mega Stones + 2 Primal
+# Reversion orbs = 48 total. Species IDs use Showdown format.
+# Cross-referenced with: Showdown items.ts megaStone field, Bulbapedia
+# ===================================================================
+
+MEGA_STONES: dict[str, dict] = {
+    # Gen 6 — Kanto starters + original 28
+    "venusaurite":       {"species": "venusaur", "mega_species": "venusaurmega", "category": "mega_stone"},
+    "charizarditex":     {"species": "charizard", "mega_species": "charizardmegax", "category": "mega_stone"},
+    "charizarditey":     {"species": "charizard", "mega_species": "charizardmegay", "category": "mega_stone"},
+    "blastoisinite":     {"species": "blastoise", "mega_species": "blastoisemega", "category": "mega_stone"},
+    "alakazite":         {"species": "alakazam", "mega_species": "alakazammega", "category": "mega_stone"},
+    "gengarite":         {"species": "gengar", "mega_species": "gengarmega", "category": "mega_stone"},
+    "kangaskhanite":     {"species": "kangaskhan", "mega_species": "kangaskhanmega", "category": "mega_stone"},
+    "pinsirite":         {"species": "pinsir", "mega_species": "pinsirmega", "category": "mega_stone"},
+    "gyaradosite":       {"species": "gyarados", "mega_species": "gyaradosmega", "category": "mega_stone"},
+    "aerodactylite":     {"species": "aerodactyl", "mega_species": "aerodactylmega", "category": "mega_stone"},
+    "mewtwonitex":       {"species": "mewtwo", "mega_species": "mewtwomegax", "category": "mega_stone"},
+    "mewtwonitey":       {"species": "mewtwo", "mega_species": "mewtwomegay", "category": "mega_stone"},
+    "ampharosite":       {"species": "ampharos", "mega_species": "ampharosmega", "category": "mega_stone"},
+    "scizorite":         {"species": "scizor", "mega_species": "scizormega", "category": "mega_stone"},
+    "heracronite":       {"species": "heracross", "mega_species": "heracrossmega", "category": "mega_stone"},
+    "houndoominite":     {"species": "houndoom", "mega_species": "houndoommega", "category": "mega_stone"},
+    "tyranitarite":      {"species": "tyranitar", "mega_species": "tyranitarmega", "category": "mega_stone"},
+    "blazikenite":       {"species": "blaziken", "mega_species": "blazikenmega", "category": "mega_stone"},
+    "gardevoirite":      {"species": "gardevoir", "mega_species": "gardevoirmega", "category": "mega_stone"},
+    "mawilite":          {"species": "mawile", "mega_species": "mawilemega", "category": "mega_stone"},
+    "aggronite":         {"species": "aggron", "mega_species": "aggronmega", "category": "mega_stone"},
+    "medichamite":       {"species": "medicham", "mega_species": "medichammega", "category": "mega_stone"},
+    "manectite":         {"species": "manectric", "mega_species": "manectricmega", "category": "mega_stone"},
+    "banettite":         {"species": "banette", "mega_species": "banettemega", "category": "mega_stone"},
+    "absolite":          {"species": "absol", "mega_species": "absolmega", "category": "mega_stone"},
+    "garchompite":       {"species": "garchomp", "mega_species": "garchompmega", "category": "mega_stone"},
+    "lucarionite":       {"species": "lucario", "mega_species": "lucariomega", "category": "mega_stone"},
+    "abomasite":         {"species": "abomasnow", "mega_species": "abomasnowmega", "category": "mega_stone"},
+    # Gen 6 ORAS — 19 additional
+    "latiasite":         {"species": "latias", "mega_species": "latiasmega", "category": "mega_stone"},
+    "latiosite":         {"species": "latios", "mega_species": "latiosmega", "category": "mega_stone"},
+    "swampertite":       {"species": "swampert", "mega_species": "swampertmega", "category": "mega_stone"},
+    "sceptilite":        {"species": "sceptile", "mega_species": "sceptilemega", "category": "mega_stone"},
+    "sablenite":         {"species": "sableye", "mega_species": "sableyemega", "category": "mega_stone"},
+    "altarianite":       {"species": "altaria", "mega_species": "altariamega", "category": "mega_stone"},
+    "galladite":         {"species": "gallade", "mega_species": "gallademega", "category": "mega_stone"},
+    "audinite":          {"species": "audino", "mega_species": "audinomega", "category": "mega_stone"},
+    "metagrossite":      {"species": "metagross", "mega_species": "metagrossmega", "category": "mega_stone"},
+    "sharpedonite":      {"species": "sharpedo", "mega_species": "sharpedomega", "category": "mega_stone"},
+    "slowbronite":       {"species": "slowbro", "mega_species": "slowbromega", "category": "mega_stone"},
+    "steelixite":        {"species": "steelix", "mega_species": "steelixmega", "category": "mega_stone"},
+    "pidgeotite":        {"species": "pidgeot", "mega_species": "pidgeotmega", "category": "mega_stone"},
+    "glalitite":         {"species": "glalie", "mega_species": "glaliemega", "category": "mega_stone"},
+    "diancite":          {"species": "diancie", "mega_species": "dianciemega", "category": "mega_stone"},
+    "cameruptite":       {"species": "camerupt", "mega_species": "cameruptmega", "category": "mega_stone"},
+    "lopunnite":         {"species": "lopunny", "mega_species": "lopunnymega", "category": "mega_stone"},
+    "salamencite":       {"species": "salamence", "mega_species": "salamencemega", "category": "mega_stone"},
+    "beedrillite":       {"species": "beedrill", "mega_species": "beedrillmega", "category": "mega_stone"},
+    # Primal Reversion orbs (functionally similar to Mega Stones)
+    "redorb":            {"species": "groudon", "mega_species": "groudonprimal", "category": "mega_stone"},
+    "blueorb":           {"species": "kyogre", "mega_species": "kyogreprimal", "category": "mega_stone"},
+}
+
+
+# ===================================================================
+# Z-CRYSTALS REGISTRY (Gen 7)
+# ===================================================================
+# Maps Z-Crystal item ID -> type and Z-Move info.
+# 18 type-specific + 15 species-specific = 33 total.
+# Species-specific crystals include the exclusive Z-Move name and BP.
+# Cross-referenced with: Showdown items.ts zMove/zMoveType/zMoveFrom
+# ===================================================================
+
+Z_CRYSTALS: dict[str, dict] = {
+    # Type Z-Crystals (18 types)
+    "normaliumz":      {"type": "Normal", "z_power": True, "category": "z_crystal"},
+    "firiumz":         {"type": "Fire", "z_power": True, "category": "z_crystal"},
+    "wateriumz":       {"type": "Water", "z_power": True, "category": "z_crystal"},
+    "electriumz":      {"type": "Electric", "z_power": True, "category": "z_crystal"},
+    "grassiumz":       {"type": "Grass", "z_power": True, "category": "z_crystal"},
+    "iciumz":          {"type": "Ice", "z_power": True, "category": "z_crystal"},
+    "fightiniumz":     {"type": "Fighting", "z_power": True, "category": "z_crystal"},
+    "poisoniumz":      {"type": "Poison", "z_power": True, "category": "z_crystal"},
+    "groundiumz":      {"type": "Ground", "z_power": True, "category": "z_crystal"},
+    "flyiniumz":       {"type": "Flying", "z_power": True, "category": "z_crystal"},
+    "psychiumz":       {"type": "Psychic", "z_power": True, "category": "z_crystal"},
+    "buginiumz":       {"type": "Bug", "z_power": True, "category": "z_crystal"},
+    "rockiumz":        {"type": "Rock", "z_power": True, "category": "z_crystal"},
+    "ghostiumz":       {"type": "Ghost", "z_power": True, "category": "z_crystal"},
+    "dragoniumz":      {"type": "Dragon", "z_power": True, "category": "z_crystal"},
+    "darkiniumz":      {"type": "Dark", "z_power": True, "category": "z_crystal"},
+    "steeliumz":       {"type": "Steel", "z_power": True, "category": "z_crystal"},
+    "fairiumz":        {"type": "Fairy", "z_power": True, "category": "z_crystal"},
+    # Species-specific Z-Crystals (15)
+    "pikaniumz":       {"type": "Electric", "species": "pikachu", "z_move": "catastropika", "z_base_move": "volttackle", "z_power": 210, "category": "z_crystal"},
+    "aloraichiumz":    {"type": "Electric", "species": "raichualola", "z_move": "stokedsparksurfer", "z_base_move": "thunderbolt", "z_power": 175, "category": "z_crystal"},
+    "decidiumz":       {"type": "Ghost", "species": "decidueye", "z_move": "sinisterarrowraid", "z_base_move": "spiritshackle", "z_power": 180, "category": "z_crystal"},
+    "inciniumz":       {"type": "Dark", "species": "incineroar", "z_move": "maliciousmoonsault", "z_base_move": "darkestlariat", "z_power": 180, "category": "z_crystal"},
+    "primariumz":      {"type": "Water", "species": "primarina", "z_move": "oceanicoperetta", "z_base_move": "sparklingaria", "z_power": 195, "category": "z_crystal"},
+    "tapuniumz":       {"type": "Fairy", "species": "tapukoko,tapulele,tapubulu,tapufini", "z_move": "guardianofalola", "z_base_move": "naturesmadness", "z_power": 0, "category": "z_crystal"},
+    "marshadiumz":     {"type": "Ghost", "species": "marshadow", "z_move": "soulstealing7starstrike", "z_base_move": "spectralthief", "z_power": 195, "category": "z_crystal"},
+    "snorliumz":       {"type": "Normal", "species": "snorlax", "z_move": "pulverizingpancake", "z_base_move": "gigaimpact", "z_power": 210, "category": "z_crystal"},
+    "eeviumz":         {"type": "Normal", "species": "eevee", "z_move": "extremeevoboost", "z_base_move": "lastresort", "z_power": 0, "category": "z_crystal"},
+    "mewniumz":        {"type": "Psychic", "species": "mew", "z_move": "genesissupernova", "z_base_move": "psychic", "z_power": 185, "category": "z_crystal"},
+    "pikashuniumz":    {"type": "Electric", "species": "pikachuoriginal,pikachuhoenn,pikachusinnoh,pikachuunova,pikachukalos,pikachualola,pikachupartner", "z_move": "10000000voltthunderbolt", "z_base_move": "thunderbolt", "z_power": 195, "category": "z_crystal"},
+    "lycaniumz":       {"type": "Rock", "species": "lycanroc,lycanrocmidnight,lycanrocdusk", "z_move": "splinteredstormshards", "z_base_move": "stoneedge", "z_power": 190, "category": "z_crystal"},
+    "mimikiumz":       {"type": "Fairy", "species": "mimikyu", "z_move": "letssnuggleforever", "z_base_move": "playrough", "z_power": 190, "category": "z_crystal"},
+    "kommoniumz":      {"type": "Dragon", "species": "kommoo", "z_move": "clangoroussoulblaze", "z_base_move": "clangingscales", "z_power": 185, "category": "z_crystal"},
+    "solganiumz":      {"type": "Steel", "species": "solgaleo,necrozmaduskmane", "z_move": "searingsunrazesmash", "z_base_move": "sunsteelstrike", "z_power": 200, "category": "z_crystal"},
+    "lunaliumz":       {"type": "Ghost", "species": "lunala,necrozmadawnwings", "z_move": "menacingmoonrazemaelstrom", "z_base_move": "moongeistbeam", "z_power": 200, "category": "z_crystal"},
+    "ultranecroziumz": {"type": "Psychic", "species": "necrozmaultra", "z_move": "lightthatburnsthesky", "z_base_move": "photongeyser", "z_power": 200, "category": "z_crystal"},
+}
+
+
+# ===================================================================
+# Z-MOVE BASE POWER TABLE (Gen 7)
+# ===================================================================
+# Converts a normal move's base power to its Z-Move base power.
+# Source: Bulbapedia Z-Move article, Showdown source (data/moves.ts)
+# ===================================================================
+
+def get_z_move_bp(original_bp: int) -> int:
+    """Convert a normal move's base power to its Z-Move base power.
+
+    Args:
+        original_bp: The base power of the original move.
+
+    Returns:
+        The base power of the corresponding Z-Move.
+    """
+    if original_bp <= 55:
+        return 100
+    if original_bp <= 65:
+        return 120
+    if original_bp <= 75:
+        return 140
+    if original_bp <= 85:
+        return 160
+    if original_bp <= 95:
+        return 175
+    if original_bp <= 100:
+        return 180
+    if original_bp <= 110:
+        return 185
+    if original_bp <= 125:
+        return 190
+    if original_bp <= 130:
+        return 195
+    return 200
+
+
+# ===================================================================
+# MAX MOVE BASE POWER TABLE (Gen 8 — Dynamax)
+# ===================================================================
+# Converts a normal move's base power to its Max Move base power.
+# Fighting and Poison types have lower scaling (Max Knuckle/Ooze).
+# Source: Bulbapedia Dynamax article, Showdown source
+# ===================================================================
+
+def get_max_move_bp(original_bp: int, move_type: str = "") -> int:
+    """Convert a normal move's base power to its Max Move base power.
+
+    Fighting and Poison type moves have reduced Max Move BP because
+    Max Knuckle and Max Ooze provide team-wide stat boosts.
+
+    Args:
+        original_bp: The base power of the original move.
+        move_type: The type of the original move (e.g., "Fighting").
+
+    Returns:
+        The base power of the corresponding Max Move.
+    """
+    reduced = move_type in ("Fighting", "Poison")
+    if original_bp <= 40:
+        return 70 if reduced else 90
+    if original_bp <= 50:
+        return 75 if reduced else 100
+    if original_bp <= 60:
+        return 80 if reduced else 110
+    if original_bp <= 70:
+        return 85 if reduced else 120
+    if original_bp <= 100:
+        return 90 if reduced else 130
+    if original_bp <= 140:
+        return 95 if reduced else 140
+    return 100 if reduced else 150
+
+
+# ===================================================================
+# GIMMICK MECHANIC HELPERS
+# ===================================================================
+
+def is_mega_stone(item_id: str) -> bool:
+    """Check if the given item ID is a Mega Stone (or Primal Orb)."""
+    return item_id in MEGA_STONES
+
+
+def is_z_crystal(item_id: str) -> bool:
+    """Check if the given item ID is a Z-Crystal."""
+    return item_id in Z_CRYSTALS
+
+
+def get_mega_species(item_id: str) -> str | None:
+    """Get the mega-evolved species ID for a given Mega Stone.
+
+    Args:
+        item_id: The Showdown item ID (e.g., "charizarditex").
+
+    Returns:
+        The mega species ID (e.g., "charizardmegax"), or None if not a Mega Stone.
+    """
+    entry = MEGA_STONES.get(item_id)
+    return entry["mega_species"] if entry else None
+
+
+def get_z_crystal_type(item_id: str) -> str | None:
+    """Get the type associated with a Z-Crystal.
+
+    Args:
+        item_id: The Showdown item ID (e.g., "firiumz").
+
+    Returns:
+        The type string (e.g., "Fire"), or None if not a Z-Crystal.
+    """
+    entry = Z_CRYSTALS.get(item_id)
+    return entry["type"] if entry else None
+
+
+def get_z_move_for_species(item_id: str) -> str | None:
+    """Get the exclusive Z-Move name for a species-specific Z-Crystal.
+
+    Args:
+        item_id: The Showdown item ID (e.g., "pikaniumz").
+
+    Returns:
+        The Z-Move ID (e.g., "catastropika"), or None if not species-specific.
+    """
+    entry = Z_CRYSTALS.get(item_id)
+    if entry and "z_move" in entry:
+        return entry["z_move"]
+    return None
+
+
+def get_gimmick_gen(item_id: str) -> int | None:
+    """Get the generation a gimmick item belongs to.
+
+    Returns:
+        6 or 7 for Mega Stones, 7 for Z-Crystals, or None.
+    """
+    if item_id in MEGA_STONES:
+        # Primal orbs and most megas are Gen 6, ORAS additions also Gen 6
+        return 6
+    if item_id in Z_CRYSTALS:
+        return 7
+    return None
 
 
 # ===================================================================

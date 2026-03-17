@@ -137,7 +137,7 @@ async def main():
             team_dim=model_cfg.get("team_hidden_dim", 256),
             attention_heads=model_cfg.get("attention_heads", 4),
             dropout=model_cfg.get("dropout", 0.25),
-            continuous_dim=model_cfg.get("continuous_dim", 64),
+            continuous_dim=model_cfg.get("continuous_dim", 72),
             rating_dim=model_cfg.get("rating_dim", 6),
         )
 

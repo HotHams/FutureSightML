@@ -29,7 +29,7 @@ class PokemonEncoder(nn.Module):
         ability_dim: int = 32,
         output_dim: int = 128,
         dropout: float = 0.2,
-        continuous_dim: int = 64,
+        continuous_dim: int = 72,
     ):
         super().__init__()
         # Ensure at least 1 entry so padding_idx=0 is valid (e.g. Gen 1 has no items)

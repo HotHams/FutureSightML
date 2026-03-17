@@ -45,7 +45,7 @@ def _to_id(name: str) -> str:
 
 
 # Number of continuous features per Pokemon for the neural network
-CONTINUOUS_DIM = 64
+CONTINUOUS_DIM = 72
 
 
 class FeatureExtractor:
@@ -309,7 +309,7 @@ class FeatureExtractor:
     # ------------------------------------------------------------------
 
     def pokemon_to_continuous(self, pkmn: dict) -> np.ndarray:
-        """Extract 64 continuous features for a single Pokemon.
+        """Extract 72 continuous features for a single Pokemon.
 
         [0-5]   Base stats (hp/atk/def/spa/spd/spe) / 255
         [6-11]  Computed stats using EVs/nature / 600
@@ -323,6 +323,14 @@ class FeatureExtractor:
         [55-59] Move detail: best secondary %, total drain, total recoil, contact frac, boost potential
         [60]    Has phazing move
         [61-63] Effective power/bulk: eff phys, eff spec, eff bulk
+        [64]    Mega Stone held (Gen 6-7)
+        [65]    Z-Crystal held (Gen 7)
+        [66]    Best Z-Move base power / 200 (Gen 7)
+        [67]    Can Dynamax (Gen 8)
+        [68]    Best Max Move power / 150 (Gen 8)
+        [69]    Tera type index / 17 (Gen 9, -1 if none)
+        [70]    Tera adds new STAB (Gen 9)
+        [71]    Tera weakness reduction (Gen 9)
         """
         feats = np.zeros(CONTINUOUS_DIM, dtype=np.float32)
         species_id = _to_id(pkmn.get("species", ""))
@@ -462,6 +470,67 @@ class FeatureExtractor:
             eff_def = def_stat * get_item_def_mult(item_id, True)
             eff_spd = spd_stat * get_item_def_mult(item_id, False)
             feats[63] = (hp_stat * (eff_def + eff_spd) / 2) / 150000.0
+
+        # === Generation-specific gimmick features [64-71] ===
+        from .mechanics import is_mega_stone, is_z_crystal, get_z_crystal_type, get_z_move_bp, get_max_move_bp
+
+        # [64] Mega Stone (Gen 6-7): Pokemon holds a Mega Stone
+        if self.gen in (6, 7) and is_mega_stone(item_id):
+            feats[64] = 1.0
+
+        # [65-66] Z-Crystal (Gen 7): holds Z-Crystal + best Z-Move power
+        if self.gen == 7 and is_z_crystal(item_id):
+            feats[65] = 1.0
+            z_type = get_z_crystal_type(item_id)
+            if z_type:
+                best_z_bp = 0
+                for move_name in pkmn.get("moves", []):
+                    if not move_name:
+                        continue
+                    mid = _to_id(move_name)
+                    mdata = self._get_move(mid) or {}
+                    if mdata.get("category") in ("Physical", "Special"):
+                        m_type = mdata.get("type", "")
+                        m_bp = mdata.get("basePower", 0) or 0
+                        # Type Z-Crystals boost same-type moves
+                        if m_type == z_type and m_bp > 0:
+                            best_z_bp = max(best_z_bp, get_z_move_bp(m_bp))
+                feats[66] = best_z_bp / 200.0
+
+        # [67-68] Dynamax (Gen 8): best Max Move power
+        if self.gen == 8:
+            feats[67] = 1.0  # can_dynamax (always true in Gen 8)
+            best_max_bp = 0
+            for move_name in pkmn.get("moves", []):
+                if not move_name:
+                    continue
+                mid = _to_id(move_name)
+                mdata = self._get_move(mid) or {}
+                if mdata.get("category") in ("Physical", "Special"):
+                    m_bp = mdata.get("basePower", 0) or 0
+                    m_type = mdata.get("type", "")
+                    if m_bp > 0:
+                        best_max_bp = max(best_max_bp, get_max_move_bp(m_bp, m_type))
+            feats[68] = best_max_bp / 150.0
+
+        # [69-71] Tera Type (Gen 9): type index + STAB gain
+        if self.gen >= 9:
+            tera_type = pkmn.get("tera_type")
+            if tera_type:
+                tera_id = _to_id(tera_type)
+                tera_idx = TYPE_TO_IDX.get(tera_type, TYPE_TO_IDX.get(tera_id.capitalize(), -1))
+                feats[69] = tera_idx / 17.0 if tera_idx >= 0 else -1.0
+                # Does Tera add STAB coverage the Pokemon doesn't already have?
+                types = self._get_types(species_id)
+                if tera_type not in types:
+                    feats[70] = 1.0  # Tera adds new STAB type
+                # Tera defensive benefit: does it remove a weakness?
+                if types:
+                    # Count weaknesses before and after Tera
+                    weak_before = sum(1 for t in TYPES if self._type_eff_against(t, types) > 1.0)
+                    weak_after = sum(1 for t in TYPES if self._type_eff_against(t, [tera_type]) > 1.0)
+                    if weak_after < weak_before:
+                        feats[71] = (weak_before - weak_after) / 7.0  # normalize
 
         return feats
 
@@ -729,6 +798,9 @@ class FeatureExtractor:
 
         # Detailed status features (6)
         features.extend(self._detailed_status_features(team[:TEAM_SIZE]))
+
+        # ---- Generation gimmick features (8) ----
+        features.extend(self._gimmick_features(team[:TEAM_SIZE]))
 
         return np.array(features, dtype=np.float32)
 
@@ -1617,6 +1689,84 @@ class FeatureExtractor:
             len(secondary_diversity) / 8.0,
             contact_count / 24.0,
         ]
+
+    def _gimmick_features(self, team: list[dict]) -> list[float]:
+        """Generation-specific gimmick features (8 features).
+
+        [0] has_mega: team has a Mega Stone holder (Gen 6-7)
+        [1] has_z_crystal: team has a Z-Crystal holder (Gen 7)
+        [2] best_z_power: best Z-Move BP on team / 200 (Gen 7)
+        [3] has_dynamax: format allows Dynamax (Gen 8)
+        [4] best_max_power: best Max Move BP on team / 150 (Gen 8)
+        [5] tera_type_diversity: unique Tera types / 6 (Gen 9)
+        [6] tera_new_stab_count: team members gaining new STAB from Tera / 6 (Gen 9)
+        [7] mega_plus_z: team has both Mega + Z-Crystal (Gen 7 legal)
+        """
+        from .mechanics import is_mega_stone, is_z_crystal, get_z_crystal_type, get_z_move_bp, get_max_move_bp
+
+        feats = [0.0] * 8
+        has_mega = False
+        has_z = False
+        best_z_bp = 0
+        best_max_bp = 0
+        tera_types = set()
+        tera_new_stab = 0
+
+        for pkmn in team:
+            if not pkmn:
+                continue
+            item_id = _to_id(pkmn.get("item") or "")
+            species_id = _to_id(pkmn.get("species", ""))
+
+            # Mega (Gen 6-7)
+            if self.gen in (6, 7) and is_mega_stone(item_id):
+                has_mega = True
+
+            # Z-Crystal (Gen 7)
+            if self.gen == 7 and is_z_crystal(item_id):
+                has_z = True
+                z_type = get_z_crystal_type(item_id)
+                if z_type:
+                    for m in pkmn.get("moves", []):
+                        if not m:
+                            continue
+                        md = self._get_move(m)
+                        if md and md.get("category") in ("Physical", "Special"):
+                            if md.get("type") == z_type:
+                                bp = md.get("basePower", 0) or 0
+                                if bp > 0:
+                                    best_z_bp = max(best_z_bp, get_z_move_bp(bp))
+
+            # Dynamax (Gen 8)
+            if self.gen == 8:
+                for m in pkmn.get("moves", []):
+                    if not m:
+                        continue
+                    md = self._get_move(m)
+                    if md and md.get("category") in ("Physical", "Special"):
+                        bp = md.get("basePower", 0) or 0
+                        if bp > 0:
+                            best_max_bp = max(best_max_bp, get_max_move_bp(bp, md.get("type", "")))
+
+            # Tera (Gen 9)
+            if self.gen >= 9:
+                tera = pkmn.get("tera_type")
+                if tera:
+                    tera_types.add(tera)
+                    types = self._get_types(species_id)
+                    if tera not in types:
+                        tera_new_stab += 1
+
+        feats[0] = 1.0 if has_mega else 0.0
+        feats[1] = 1.0 if has_z else 0.0
+        feats[2] = best_z_bp / 200.0
+        feats[3] = 1.0 if self.gen == 8 else 0.0
+        feats[4] = best_max_bp / 150.0
+        feats[5] = len(tera_types) / 6.0
+        feats[6] = tera_new_stab / 6.0
+        feats[7] = 1.0 if (has_mega and has_z) else 0.0  # Gen 7 legal combo
+
+        return feats
 
     # ------------------------------------------------------------------
     # Pre-digested team data for fast matchup evaluation
