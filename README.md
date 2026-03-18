@@ -55,13 +55,18 @@ XGBoost (618+ engineered features) ───────────────
 - **Ensemble**: Per-format calibrated weights, saved to JSON
 - **Gen-aware**: Type charts, stat formulas, move categories, and learnsets are all generation-correct
 
+## System Requirements
+
+- **OS**: Windows 10+ (desktop app), or any OS with Python 3.10+ (from source)
+- **GPU**: NVIDIA GPU with CUDA recommended for fastest inference. CPU-only works but is slower.
+- **RAM**: 4 GB minimum, 8 GB recommended
+- **Disk**: ~3.5 GB for desktop app, ~500 MB for source + models
+
 ## Quick Start
 
 ### Desktop App (Windows)
 
 [Download from HuggingFace](https://huggingface.co/HotHams/FutureSightML/resolve/main/FutureSightML-win-x64.zip) (~3 GB). Extract, run `FutureSightML.exe`. Models download automatically on first launch.
-
-Requires Windows 10+ and an NVIDIA GPU (CUDA) for best performance.
 
 ### From Source
 
