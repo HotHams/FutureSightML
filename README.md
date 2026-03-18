@@ -4,9 +4,9 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Formats](https://img.shields.io/badge/formats-62-orange.svg)](#supported-formats)
+[![Formats](https://img.shields.io/badge/formats-61-orange.svg)](#supported-formats)
 
-FutureSightML uses a neural transformer encoder with a pairwise matchup matrix branch, combined with an XGBoost ensemble, to evaluate Pokemon teams before a single move is made. It ships pre-trained models for **62 competitive formats across Generations 1-9** and includes a retro-styled desktop GUI, a FastAPI backend, and a genetic algorithm team builder.
+FutureSightML uses a neural transformer encoder with a pairwise matchup matrix branch, combined with an XGBoost ensemble, to evaluate Pokemon teams before a single move is made. It ships pre-trained models for **61 competitive formats across Generations 1-9** and includes a retro-styled desktop GUI, a FastAPI backend, and a genetic algorithm team builder.
 
 ![FutureSightML GUI](docs/screenshot_post.png)
 
@@ -14,26 +14,25 @@ FutureSightML uses a neural transformer encoder with a pairwise matchup matrix b
 
 Pre-game win prediction from team composition alone (held-out test set, no rating leakage):
 
-Select formats shown (62 total):
+Select formats shown (61 total):
 
 | Format | Neural AUC | XGB AUC |
 |---|---|---|
-| Gen 1 OU | 0.8098 | 0.8023 |
-| Gen 3 OU | 0.8543 | 0.8272 |
-| Gen 4 OU | 0.8477 | 0.8416 |
-| Gen 5 OU | 0.7500 | 0.7412 |
-| Gen 6 OU | 0.7705 | 0.7643 |
-| Gen 7 OU | 0.7943 | 0.7479 |
-| Gen 7 Ubers | 0.8277 | 0.7807 |
-| Gen 7 1v1 | 0.8610 | 0.8708 |
-| Gen 8 OU | 0.7625 | 0.7224 |
-| Gen 8 Ubers | 0.8363 | 0.8058 |
-| Gen 8 VGC 2020 | 0.8032 | 0.7806 |
-| Gen 9 OU | 0.7588 | 0.6878 |
-| Gen 9 Ubers | 0.8140 | 0.7519 |
-| Gen 9 AG | 0.8460 | 0.7719 |
-| Gen 9 Monotype | 0.8174 | 0.7865 |
-| Gen 9 VGC 2026 | 0.7371 | 0.7106 |
+| Gen 1 OU | 0.8034 | 0.8023 |
+| Gen 3 OU | 0.8590 | 0.8276 |
+| Gen 4 OU | 0.8531 | 0.8413 |
+| Gen 5 OU | 0.7577 | 0.7429 |
+| Gen 6 OU | 0.7640 | 0.7649 |
+| Gen 7 OU | 0.7959 | 0.7449 |
+| Gen 7 Ubers | 0.8212 | 0.7797 |
+| Gen 8 OU | 0.7611 | 0.7223 |
+| Gen 8 Ubers | 0.8302 | 0.8047 |
+| Gen 8 VGC 2020 | 0.8008 | 0.7807 |
+| Gen 9 OU | 0.7598 | 0.6876 |
+| Gen 9 Ubers | 0.8119 | 0.7517 |
+| Gen 9 AG | 0.8448 | 0.7717 |
+| Gen 9 Monotype | 0.8231 | 0.7905 |
+| Gen 9 VGC 2026 | 0.7351 | 0.7117 |
 
 All numbers are team-only AUC on a held-out test set with equalized ratings (no Elo leakage). For context: Dota 2 draft prediction AUC is 0.66-0.71, Hearthstone deck prediction AUC is 0.65-0.68.
 
@@ -96,7 +95,7 @@ Everything runs locally. Nothing leaves your machine.
 
 ## Supported Formats
 
-62 formats with pre-trained models across Generations 1-9, including OU, UU, RU, NU, Ubers, VGC, Doubles OU, LC, Monotype, National Dex, 1v1, AG, and more. See `config.yaml` for the full list.
+61 formats with pre-trained models across Generations 1-9, including OU, UU, RU, NU, Ubers, VGC, Doubles OU, LC, Monotype, National Dex, 1v1, AG, and more. See `config.yaml` for the full list.
 
 ## Building the Desktop App
 
