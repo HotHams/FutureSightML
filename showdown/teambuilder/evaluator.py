@@ -95,12 +95,12 @@ class TeamEvaluator:
             raw = self.predictor.predict_team_winrate_fast(
                 team, n_sample=self.n_sample,
             )
-            # Calibrate: tree models extrapolate wildly for out-of-distribution
-            # compositions. Clip predictions to a reasonable range, then blend
-            # with meta-alignment so commonly-used Pokemon get a fitness bonus.
-            clipped = float(np.clip(raw, 0.35, 0.65))
+            # Light calibration: clip extreme XGBoost extrapolation but
+            # preserve enough signal for the genetic algorithm to differentiate.
+            # Meta-alignment gives a small bonus for proven species.
+            clipped = float(np.clip(raw, 0.25, 0.75))
             alignment = self._meta_alignment(team)
-            fitness = 0.5 * clipped + 0.5 * alignment
+            fitness = 0.8 * clipped + 0.2 * alignment
         else:
             fitness = self.predictor.predict_team_winrate(team, self.meta_teams)
 
