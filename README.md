@@ -149,6 +149,12 @@ Contributions are welcome! Please:
 3. Run existing tests (`pytest tests/ -v`)
 4. Submit a pull request
 
+## Acknowledgments
+
+- **[HolidayOugi](https://huggingface.co/datasets/HolidayOugi/pokemon-showdown-replays)** for the 30.5M replay dataset on HuggingFace
+- **[Smogon](https://www.smogon.com/)** and **[Pokemon Showdown](https://pokemonshowdown.com/)** for usage statistics, replay data, and the battle simulator
+- **[pkmn.cc](https://pkmn.cc/)** for the Showdown data files (pokedex, moves, items, abilities, learnsets)
+
 ## License
 
 MIT
